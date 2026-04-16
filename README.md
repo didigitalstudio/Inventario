@@ -29,26 +29,19 @@ App de inventario con fotos, precios, ubicación y fechas. Guardado en la nube c
    - **Project URL** → es tu `VITE_SUPABASE_URL`
    - **anon public key** → es tu `VITE_SUPABASE_ANON_KEY`
 
-### 4. Subir a Netlify
+### 4. Subir a Vercel
 
-#### Opción A: Desde GitHub (recomendada)
 1. Subí esta carpeta a un repositorio en GitHub
-2. En [netlify.com](https://netlify.com), hacé clic en **"Add new site"** > **"Import an existing project"**
-3. Conectá tu repositorio de GitHub
-4. En **Build settings** ya debería estar configurado (si no: Build command = `npm run build`, Publish directory = `dist`)
-5. En **Environment variables**, agregá:
+2. En [vercel.com/new](https://vercel.com/new), importá el repositorio
+3. Vercel detecta Vite automáticamente (Build command = `npm run build`, Output = `dist`)
+4. En **Environment Variables**, agregá:
    - `VITE_SUPABASE_URL` = tu URL de Supabase
    - `VITE_SUPABASE_ANON_KEY` = tu anon key
-6. Hacé clic en **Deploy**
-
-#### Opción B: Manual (drag & drop)
-1. Creá un archivo `.env` basándote en `.env.example` con tus claves
-2. Ejecutá `npm install` y después `npm run build`
-3. Arrastrá la carpeta `dist` a [app.netlify.com/drop](https://app.netlify.com/drop)
+5. Hacé clic en **Deploy**
 
 ### 5. ¡Listo!
 
-Netlify te da una URL tipo `tu-nombre.netlify.app`. Compartile esa URL a tu papá y puede usarla desde el iPhone como una app.
+Vercel te da una URL tipo `tu-nombre.vercel.app`. Compartile esa URL a tu papá y puede usarla desde el iPhone como una app.
 
 **Tip para iPhone:** Tu papá puede agregar la app a la pantalla de inicio:
 1. Abrir la URL en Safari
@@ -63,7 +56,6 @@ Netlify te da una URL tipo `tu-nombre.netlify.app`. Compartile esa URL a tu pap�
 ```
 inventario-app/
 ├── index.html              # HTML principal (con meta tags para iPhone)
-├── netlify.toml            # Configuración de Netlify
 ├── package.json            # Dependencias
 ├── vite.config.js          # Config de Vite
 ├── supabase-setup.sql      # SQL para crear la tabla
