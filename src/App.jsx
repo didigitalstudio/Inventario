@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 
 const CATEGORIAS = [
@@ -24,8 +24,20 @@ const CATEGORIAS = [
   { id: "otros", label: "Otros", icon: "📦" },
 ];
 
+const BUCKET = "fotos-productos";
+const MAX_PHOTO_MB = 5;
+const FETCH_LIMIT = 500;
+
 function formatCurrency(n) {
-  return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n);
+  return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n || 0);
+}
+function formatCurrencyShort(n) {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "-" : "";
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
+  if (abs >= 1000) return `${sign}$${Math.round(abs / 1000)}k`;
+  return `${sign}$${Math.round(abs)}`;
 }
 function formatDate(d) {
   if (!d) return "—";
@@ -34,10 +46,21 @@ function formatDate(d) {
 }
 function monthLabel(yyyy, mm) {
   const names = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-  return `${names[parseInt(mm)-1]} ${String(yyyy).slice(2)}`;
+  return `${names[parseInt(mm) - 1]} ${String(yyyy).slice(2)}`;
 }
 function getCat(id) {
   return CATEGORIAS.find((c) => c.id === id) || { label: "Otros", icon: "📦" };
+}
+function normalize(s) {
+  return (s || "").toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+function isStorageUrl(url) {
+  return typeof url === "string" && url.includes(`/storage/v1/object/public/${BUCKET}/`);
+}
+function storagePathFromUrl(url) {
+  const marker = `/${BUCKET}/`;
+  const i = url.indexOf(marker);
+  return i === -1 ? null : url.slice(i + marker.length);
 }
 
 function StatusBadge({ sold }) {
@@ -48,39 +71,52 @@ function StatusBadge({ sold }) {
   );
 }
 
-function Spinner() {
+function Spinner({ small }) {
+  const size = small ? 18 : 32;
   return (
-    <div style={{ textAlign: "center", padding: "3rem" }}>
-      <div style={{ width: 32, height: 32, border: "3px solid #F1EFE8", borderTop: "3px solid #1D9E75", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 12px" }} />
-      <p style={{ fontSize: 14, color: "#888780" }}>Cargando...</p>
+    <div style={{ textAlign: "center", padding: small ? 0 : "3rem" }}>
+      <div style={{ width: size, height: size, border: `${small ? 2 : 3}px solid #F1EFE8`, borderTop: `${small ? 2 : 3}px solid #1D9E75`, borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: small ? 0 : "0 auto 12px", display: "inline-block" }} />
+      {!small && <p style={{ fontSize: 14, color: "#888780" }}>Cargando...</p>}
     </div>
   );
 }
 
-function Toast({ message, type, onClose }) {
-  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
+function Toast({ toast, onClose }) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!toast) return;
+    const duration = toast.action ? 7000 : 3000;
+    const t = setTimeout(() => closeRef.current(), duration);
+    return () => clearTimeout(t);
+  }, [toast]);
+  if (!toast) return null;
   return (
-    <div style={{ position: "fixed", bottom: 80, left: "50%", transform: "translateX(-50%)", background: type === "error" ? "#A32D2D" : "#1D9E75", color: "#fff", padding: "12px 20px", borderRadius: 12, fontSize: 14, fontWeight: 500, zIndex: 100, maxWidth: "90vw", textAlign: "center", animation: "fadeIn 0.2s ease" }}>
-      {message}
+    <div style={{ position: "fixed", bottom: 80, left: "50%", transform: "translateX(-50%)", background: toast.type === "error" ? "#A32D2D" : "#1D9E75", color: "#fff", padding: "10px 14px", borderRadius: 12, fontSize: 14, fontWeight: 500, zIndex: 100, maxWidth: "90vw", display: "flex", alignItems: "center", gap: 10, animation: "fadeIn 0.2s ease" }}>
+      <span>{toast.message}</span>
+      {toast.action && (
+        <button onClick={() => { toast.action.onClick(); closeRef.current(); }} style={{ background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+          {toast.action.label}
+        </button>
+      )}
     </div>
   );
 }
 
-function PhotoUpload({ value, onChange }) {
-  const ref = useRef();
-  const handle = (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
-    if (f.size > 2 * 1024 * 1024) { alert("La foto no puede pesar más de 2 MB"); return; }
-    const r = new FileReader();
-    r.onload = (ev) => onChange(ev.target.result);
-    r.readAsDataURL(f);
-  };
+function Modal({ open, title, message, confirmText = "Confirmar", cancelText = "Cancelar", danger, onConfirm, onCancel }) {
+  if (!open) return null;
   return (
-    <div onClick={() => ref.current.click()} style={{ width: "100%", height: 180, borderRadius: 16, border: value ? "none" : "2px dashed #D3D1C7", background: value ? `url(${value}) center/cover no-repeat` : "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", position: "relative", overflow: "hidden" }}>
-      {!value && <div style={{ textAlign: "center", color: "#888780" }}><div style={{ fontSize: 28, marginBottom: 4 }}>📷</div><div style={{ fontSize: 13 }}>Tocá para subir foto</div></div>}
-      {value && <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.5)", color: "#fff", borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 600 }}>Cambiar</div>}
-      <input ref={ref} type="file" accept="image/*" onChange={handle} style={{ display: "none" }} />
+    <div onClick={onCancel} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 20, animation: "fadeIn 0.15s ease" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, padding: 20, maxWidth: 360, width: "100%" }}>
+        <h3 style={{ fontSize: 17, fontWeight: 700, margin: "0 0 8px", color: "#2C2C2A" }}>{title}</h3>
+        {message && <p style={{ fontSize: 14, color: "#5F5E5A", margin: "0 0 18px", lineHeight: 1.5 }}>{message}</p>}
+        <div style={{ display: "flex", gap: 8 }}>
+          {onCancel && (
+            <button onClick={onCancel} style={{ flex: 1, background: "#F7F6F3", color: "#2C2C2A", border: "none", borderRadius: 12, padding: "12px 0", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", minHeight: 44 }}>{cancelText}</button>
+          )}
+          <button onClick={onConfirm} style={{ flex: 1, background: danger ? "#A32D2D" : "#1D9E75", color: "#fff", border: "none", borderRadius: 12, padding: "12px 0", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", minHeight: 44 }}>{confirmText}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -118,18 +154,116 @@ function CategoryPicker({ value, onChange }) {
   );
 }
 
-function ProductForm({ item, onSave, onDelete, saving }) {
+function PhotoUpload({ value, onChange, onError }) {
+  const ref = useRef();
+  const [uploading, setUploading] = useState(false);
+
+  const upload = async (file) => {
+    setUploading(true);
+    try {
+      if (value && isStorageUrl(value)) {
+        const oldPath = storagePathFromUrl(value);
+        if (oldPath) await supabase.storage.from(BUCKET).remove([oldPath]);
+      }
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext || "jpg"}`;
+      const { error } = await supabase.storage.from(BUCKET).upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type });
+      if (error) throw error;
+      const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+      onChange(data.publicUrl);
+    } catch (err) {
+      onError?.("Error subiendo foto: " + (err.message || "desconocido"));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handle = (e) => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    if (f.size > MAX_PHOTO_MB * 1024 * 1024) {
+      onError?.(`La foto no puede pesar más de ${MAX_PHOTO_MB} MB`);
+      return;
+    }
+    upload(f);
+  };
+
+  const removePhoto = async () => {
+    if (value && isStorageUrl(value)) {
+      const path = storagePathFromUrl(value);
+      if (path) await supabase.storage.from(BUCKET).remove([path]);
+    }
+    onChange("");
+  };
+
+  return (
+    <div>
+      <div onClick={() => !uploading && ref.current.click()} style={{ width: "100%", height: 180, borderRadius: 16, border: value ? "none" : "2px dashed #D3D1C7", background: value ? `url(${value}) center/cover no-repeat` : "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", position: "relative", overflow: "hidden" }}>
+        {uploading && (
+          <div style={{ position: "absolute", inset: 0, background: "rgba(255,255,255,0.8)", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 6 }}>
+            <Spinner small />
+            <span style={{ fontSize: 12, color: "#5F5E5A", fontWeight: 600 }}>Subiendo...</span>
+          </div>
+        )}
+        {!value && !uploading && (
+          <div style={{ textAlign: "center", color: "#888780" }}>
+            <div style={{ fontSize: 28, marginBottom: 4 }}>📷</div>
+            <div style={{ fontSize: 13 }}>Tocá para subir foto</div>
+          </div>
+        )}
+        {value && !uploading && (
+          <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.5)", color: "#fff", borderRadius: 8, padding: "4px 10px", fontSize: 11, fontWeight: 600 }}>Cambiar</div>
+        )}
+        <input ref={ref} type="file" accept="image/*" onChange={handle} style={{ display: "none" }} />
+      </div>
+      {value && !uploading && (
+        <button type="button" onClick={removePhoto} style={{ background: "none", border: "none", color: "#A32D2D", fontSize: 13, fontWeight: 600, cursor: "pointer", marginTop: 6, padding: "4px 0", fontFamily: "inherit" }}>
+          Quitar foto
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError }) {
   const [f, setF] = useState({
-    nombre: item?.nombre || "", descripcion: item?.descripcion || "",
-    precio_compra: item?.precio_compra || "", precio_venta: item?.precio_venta || "",
-    ubicacion: item?.ubicacion || "", fecha_compra: item?.fecha_compra || "",
-    fecha_venta: item?.fecha_venta || "", foto_url: item?.foto_url || "",
+    nombre: item?.nombre || "",
+    descripcion: item?.descripcion || "",
+    precio_compra: item?.precio_compra ?? "",
+    precio_venta: item?.precio_venta ?? "",
+    ubicacion: item?.ubicacion || "",
+    fecha_compra: item?.fecha_compra || "",
+    fecha_venta: item?.fecha_venta || "",
+    foto_url: item?.foto_url || "",
     categoria: item?.categoria || "otros",
   });
   const s = (k, v) => setF((p) => ({ ...p, [k]: v }));
+
+  const handleSave = () => {
+    if (!f.nombre.trim()) return onError("Ingresá un nombre para el producto");
+    const precioVenta = Number(f.precio_venta) || 0;
+    const hasFechaVenta = !!f.fecha_venta;
+    const hasPrecioVenta = precioVenta > 0;
+    if (hasFechaVenta !== hasPrecioVenta) {
+      return onError("Completá fecha y precio de venta, o dejá ambos vacíos.");
+    }
+    if (f.fecha_compra && f.fecha_venta && f.fecha_venta < f.fecha_compra) {
+      return onError("La fecha de venta no puede ser anterior a la de compra.");
+    }
+    onSave({
+      ...f,
+      id: item?.id,
+      precio_compra: Number(f.precio_compra) || 0,
+      precio_venta: precioVenta,
+      fecha_compra: f.fecha_compra || null,
+      fecha_venta: f.fecha_venta || null,
+    });
+  };
+
   return (
     <div style={{ animation: "fadeIn 0.2s ease", paddingBottom: 30 }}>
-      <PhotoUpload value={f.foto_url} onChange={(v) => s("foto_url", v)} />
+      <PhotoUpload value={f.foto_url} onChange={(v) => s("foto_url", v)} onError={onError} />
       <div style={{ marginTop: 16 }}>
         <Field label="Nombre del producto"><input style={inp} value={f.nombre} onChange={(e) => s("nombre", e.target.value)} placeholder="Ej: Reloj Longines 1940" /></Field>
         <CategoryPicker value={f.categoria} onChange={(v) => s("categoria", v)} />
@@ -144,14 +278,11 @@ function ProductForm({ item, onSave, onDelete, saving }) {
           <Field label="Fecha venta"><input style={inp} type="date" value={f.fecha_venta} onChange={(e) => s("fecha_venta", e.target.value)} /></Field>
         </div>
       </div>
-      <button disabled={saving} onClick={() => {
-        if (!f.nombre.trim()) return alert("Ingresá un nombre");
-        onSave({ ...f, id: item?.id, precio_compra: Number(f.precio_compra) || 0, precio_venta: Number(f.precio_venta) || 0, fecha_compra: f.fecha_compra || null, fecha_venta: f.fecha_venta || null });
-      }} style={{ width: "100%", background: saving ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 16, fontWeight: 600, cursor: saving ? "default" : "pointer", marginTop: 8, minHeight: 48 }}>
+      <button disabled={saving} onClick={handleSave} style={{ width: "100%", background: saving ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 16, fontWeight: 600, cursor: saving ? "default" : "pointer", marginTop: 8, minHeight: 48 }}>
         {saving ? "Guardando..." : item ? "Guardar cambios" : "Agregar producto"}
       </button>
       {item && onDelete && (
-        <button disabled={saving} onClick={() => { if (confirm("¿Eliminar este producto?")) onDelete(item.id); }} style={{ width: "100%", background: "#FCEBEB", color: "#A32D2D", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 15, fontWeight: 600, cursor: "pointer", marginTop: 10, minHeight: 48 }}>
+        <button disabled={saving} onClick={() => onRequestDelete(item)} style={{ width: "100%", background: "#FCEBEB", color: "#A32D2D", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 15, fontWeight: 600, cursor: "pointer", marginTop: 10, minHeight: 48 }}>
           Eliminar producto
         </button>
       )}
@@ -160,10 +291,10 @@ function ProductForm({ item, onSave, onDelete, saving }) {
 }
 
 function ProductCard({ item, onClick }) {
-  const profit = item.precio_venta ? item.precio_venta - item.precio_compra : null;
+  const profit = item.precio_venta ? Number(item.precio_venta) - Number(item.precio_compra) : null;
   const cat = getCat(item.categoria);
   return (
-    <div onClick={onClick} style={{ display: "flex", gap: 12, padding: "12px 0", borderBottom: "1px solid #F1EFE8", cursor: "pointer" }}>
+    <div role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }} style={{ display: "flex", gap: 12, padding: "12px 0", borderBottom: "1px solid #F1EFE8", cursor: "pointer", outline: "none" }}>
       <div style={{ width: 64, height: 64, minWidth: 64, borderRadius: 12, overflow: "hidden", background: item.foto_url ? `url(${item.foto_url}) center/cover no-repeat` : "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 }}>
         {!item.foto_url && cat.icon}
       </div>
@@ -187,17 +318,20 @@ function ProductCard({ item, onClick }) {
 }
 
 function Stats({ items }) {
-  const stock = items.filter((i) => !i.fecha_venta).length;
-  const vendidos = items.filter((i) => !!i.fecha_venta).length;
-  const invertido = items.reduce((s, i) => s + (Number(i.precio_compra) || 0), 0);
-  const ganancia = items.filter((i) => i.fecha_venta && i.precio_venta).reduce((s, i) => s + (Number(i.precio_venta) - Number(i.precio_compra)), 0);
+  const stats = useMemo(() => {
+    const stock = items.filter((i) => !i.fecha_venta);
+    const vendidos = items.filter((i) => !!i.fecha_venta);
+    const invertido = stock.reduce((s, i) => s + (Number(i.precio_compra) || 0), 0);
+    const ganancia = vendidos.filter((i) => i.precio_venta).reduce((s, i) => s + (Number(i.precio_venta) - Number(i.precio_compra)), 0);
+    return { stock: stock.length, vendidos: vendidos.length, invertido, ganancia };
+  }, [items]);
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
       {[
-        { label: "En stock", value: stock, color: "#185FA5" },
-        { label: "Vendidos", value: vendidos, color: "#3B6D11" },
-        { label: "Invertido", value: formatCurrency(invertido), color: "#854F0B" },
-        { label: "Ganancia", value: formatCurrency(ganancia), color: ganancia >= 0 ? "#0F6E56" : "#A32D2D" },
+        { label: "En stock", value: stats.stock, color: "#185FA5" },
+        { label: "Vendidos", value: stats.vendidos, color: "#3B6D11" },
+        { label: "Invertido (stock)", value: formatCurrency(stats.invertido), color: "#854F0B" },
+        { label: "Ganancia", value: formatCurrency(stats.ganancia), color: stats.ganancia >= 0 ? "#0F6E56" : "#A32D2D" },
       ].map((d) => (
         <div key={d.label} style={{ background: "#F7F6F3", borderRadius: 12, padding: "10px 12px" }}>
           <div style={{ fontSize: 11, color: "#888780", marginBottom: 2 }}>{d.label}</div>
@@ -209,7 +343,7 @@ function Stats({ items }) {
 }
 
 function CategoryFilter({ value, onChange, items }) {
-  const usedCats = [...new Set(items.map((i) => i.categoria).filter(Boolean))];
+  const usedCats = useMemo(() => [...new Set(items.map((i) => i.categoria).filter(Boolean))], [items]);
   return (
     <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 8, marginBottom: 8, scrollbarWidth: "none" }}>
       <button onClick={() => onChange("todos")} style={{ flexShrink: 0, background: value === "todos" ? "#1D9E75" : "#F7F6F3", color: value === "todos" ? "#fff" : "#5F5E5A", border: "none", borderRadius: 20, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>Todas</button>
@@ -274,24 +408,31 @@ function HistorialView({ items }) {
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
   const [catFiltro, setCatFiltro] = useState("todos");
-  const vendidos = items.filter((i) => i.fecha_venta && i.precio_venta);
-  const filtrados = vendidos.filter((i) => {
-    if (desde && i.fecha_venta < desde) return false;
-    if (hasta && i.fecha_venta > hasta) return false;
-    if (catFiltro !== "todos" && i.categoria !== catFiltro) return false;
-    return true;
-  });
-  const porMes = {};
-  filtrados.forEach((i) => {
-    const key = i.fecha_venta.slice(0, 7);
-    if (!porMes[key]) porMes[key] = { ganancia: 0, cantidad: 0 };
-    porMes[key].ganancia += Number(i.precio_venta) - Number(i.precio_compra);
-    porMes[key].cantidad += 1;
-  });
-  const meses = Object.keys(porMes).sort();
-  const maxG = Math.max(...meses.map((m) => Math.abs(porMes[m].ganancia)), 1);
-  const totalGanancia = filtrados.reduce((s, i) => s + (Number(i.precio_venta) - Number(i.precio_compra)), 0);
-  const usedCats = [...new Set(vendidos.map((i) => i.categoria).filter(Boolean))];
+
+  const { vendidos, filtrados, meses, porMes, maxG, totalGanancia, usedCats } = useMemo(() => {
+    const vendidos = items.filter((i) => i.fecha_venta && i.precio_venta);
+    const filtrados = vendidos.filter((i) => {
+      if (desde && i.fecha_venta < desde) return false;
+      if (hasta && i.fecha_venta > hasta) return false;
+      if (catFiltro !== "todos" && i.categoria !== catFiltro) return false;
+      return true;
+    });
+    const porMes = {};
+    filtrados.forEach((i) => {
+      const key = i.fecha_venta.slice(0, 7);
+      if (!porMes[key]) porMes[key] = { ganancia: 0, cantidad: 0 };
+      porMes[key].ganancia += Number(i.precio_venta) - Number(i.precio_compra);
+      porMes[key].cantidad += 1;
+    });
+    const meses = Object.keys(porMes).sort();
+    const maxG = Math.max(...meses.map((m) => Math.abs(porMes[m].ganancia)), 1);
+    const totalGanancia = filtrados.reduce((s, i) => s + (Number(i.precio_venta) - Number(i.precio_compra)), 0);
+    const usedCats = [...new Set(vendidos.map((i) => i.categoria).filter(Boolean))];
+    return { vendidos, filtrados, meses, porMes, maxG, totalGanancia, usedCats };
+  }, [items, desde, hasta, catFiltro]);
+
+  const filtradosSorted = useMemo(() => [...filtrados].sort((a, b) => b.fecha_venta.localeCompare(a.fecha_venta)), [filtrados]);
+
   return (
     <div style={{ animation: "fadeIn 0.2s ease", paddingBottom: 40 }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
@@ -333,16 +474,16 @@ function HistorialView({ items }) {
                 const [yyyy, mm] = m.split("-");
                 return (
                   <div key={m} style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 40, flex: 1 }}>
-                    <span style={{ fontSize: 8, color: "#888780", marginBottom: 2, fontWeight: 600, textAlign: "center" }}>{formatCurrency(g).replace(/\.000/,"k")}</span>
+                    <span style={{ fontSize: 9, color: "#888780", marginBottom: 2, fontWeight: 600, textAlign: "center" }}>{formatCurrencyShort(g)}</span>
                     <div style={{ width: "100%", height: `${pct}%`, background: g >= 0 ? "#1D9E75" : "#E24B4A", borderRadius: "4px 4px 0 0", minHeight: 4 }} />
-                    <span style={{ fontSize: 8, color: "#888780", marginTop: 3, textAlign: "center" }}>{monthLabel(yyyy, mm)}</span>
+                    <span style={{ fontSize: 9, color: "#888780", marginTop: 3, textAlign: "center" }}>{monthLabel(yyyy, mm)}</span>
                   </div>
                 );
               })}
             </div>
           </div>
           <p style={{ fontSize: 13, fontWeight: 600, color: "#5F5E5A", margin: "0 0 8px" }}>Detalle de ventas</p>
-          {filtrados.sort((a, b) => b.fecha_venta.localeCompare(a.fecha_venta)).map((item) => {
+          {filtradosSorted.map((item) => {
             const g = Number(item.precio_venta) - Number(item.precio_compra);
             const cat = getCat(item.categoria);
             return (
@@ -389,7 +530,62 @@ function BottomNav({ tab, setTab }) {
   );
 }
 
-export default function App() {
+function AuthScreen() {
+  const [mode, setMode] = useState("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setMsg(null);
+    try {
+      if (mode === "signin") {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        setMsg({ type: "success", text: "Cuenta creada. Revisá tu mail si Supabase pide confirmación, o ya podés iniciar sesión." });
+        setMode("signin");
+      }
+    } catch (err) {
+      setMsg({ type: "error", text: err.message || "Error de autenticación" });
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ fontFamily: "'DM Sans','Segoe UI',-apple-system,sans-serif", maxWidth: 420, margin: "0 auto", padding: "60px 20px", color: "#2C2C2A", minHeight: "100dvh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+      <style>{`
+        @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+        @keyframes spin{to{transform:rotate(360deg)}}
+      `}</style>
+      <div style={{ textAlign: "center", marginBottom: 32 }}>
+        <div style={{ fontSize: 48, marginBottom: 8 }}>📦</div>
+        <h1 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 4px", letterSpacing: -0.5 }}>Casty Inventario</h1>
+        <p style={{ fontSize: 14, color: "#888780", margin: 0 }}>{mode === "signin" ? "Iniciá sesión para continuar" : "Crear cuenta nueva"}</p>
+      </div>
+      <form onSubmit={submit}>
+        <Field label="Email"><input type="email" style={inp} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="tu@email.com" required autoComplete="email" /></Field>
+        <Field label="Contraseña"><input type="password" style={inp} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required minLength={6} autoComplete={mode === "signin" ? "current-password" : "new-password"} /></Field>
+        {msg && (
+          <div style={{ background: msg.type === "error" ? "#FCEBEB" : "#EAF3DE", color: msg.type === "error" ? "#A32D2D" : "#3B6D11", padding: "10px 12px", borderRadius: 10, fontSize: 13, fontWeight: 500, marginBottom: 12, lineHeight: 1.4 }}>{msg.text}</div>
+        )}
+        <button type="submit" disabled={loading} style={{ width: "100%", background: loading ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 16, fontWeight: 600, cursor: loading ? "default" : "pointer", marginTop: 4, minHeight: 48 }}>
+          {loading ? "..." : mode === "signin" ? "Entrar" : "Crear cuenta"}
+        </button>
+      </form>
+      <button type="button" onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMsg(null); }} style={{ background: "none", border: "none", color: "#1D9E75", fontSize: 13, fontWeight: 600, cursor: "pointer", marginTop: 18, fontFamily: "inherit", textAlign: "center" }}>
+        {mode === "signin" ? "¿No tenés cuenta? Creá una" : "¿Ya tenés cuenta? Entrar"}
+      </button>
+    </div>
+  );
+}
+
+function InventoryApp({ session }) {
   const [items, setItems] = useState([]);
   const [tab, setTab] = useState("list");
   const [view, setView] = useState("list");
@@ -401,15 +597,24 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  const showToast = (msg, type = "success") => setToast({ message: msg, type });
+  const closeToast = useCallback(() => setToast(null), []);
+  const showToast = useCallback((message, type = "success", action = null) => setToast({ message, type, action }), []);
+  const showError = useCallback((message) => setToast({ message, type: "error" }), []);
 
   const fetchItems = useCallback(async () => {
-    const { data, error } = await supabase.from("productos").select("*").order("created_at", { ascending: false });
-    if (error) showToast("Error al cargar", "error");
+    const { data, error } = await supabase
+      .from("productos")
+      .select("*")
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false })
+      .limit(FETCH_LIMIT);
+    if (error) showError("Error al cargar: " + error.message);
     else setItems(data || []);
     setLoading(false);
-  }, []);
+  }, [showError]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
@@ -429,28 +634,58 @@ export default function App() {
       }
       await fetchItems();
       setView("list"); setEditing(null); setSelected(null);
-    } catch (err) { showToast("Error: " + err.message, "error"); }
+    } catch (err) {
+      showError("Error: " + err.message);
+    }
     setSaving(false);
   };
 
-  const del = async (id) => {
+  const requestDelete = (item) => {
+    setConfirmDialog({
+      title: "¿Eliminar producto?",
+      message: `"${item.nombre}" se va a mover a la papelera. Podés deshacerlo durante 7 segundos.`,
+      confirmText: "Eliminar",
+      danger: true,
+      onConfirm: () => { setConfirmDialog(null); softDelete(item); },
+      onCancel: () => setConfirmDialog(null),
+    });
+  };
+
+  const softDelete = async (item) => {
     setSaving(true);
     try {
-      const { error } = await supabase.from("productos").delete().eq("id", id);
+      const { error } = await supabase.from("productos").update({ deleted_at: new Date().toISOString() }).eq("id", item.id);
       if (error) throw error;
-      showToast("Eliminado");
       await fetchItems();
       setView("list"); setEditing(null); setSelected(null);
-    } catch (err) { showToast("Error al eliminar", "error"); }
+      setToast({
+        message: "Producto eliminado",
+        type: "success",
+        action: {
+          label: "Deshacer",
+          onClick: async () => {
+            const { error: e2 } = await supabase.from("productos").update({ deleted_at: null }).eq("id", item.id);
+            if (!e2) { await fetchItems(); showToast("Restaurado"); }
+          },
+        },
+      });
+    } catch (err) {
+      showError("Error al eliminar: " + err.message);
+    }
     setSaving(false);
   };
 
-  const filtered = items.filter((i) => {
-    const ms = !search || i.nombre.toLowerCase().includes(search.toLowerCase()) || (i.ubicacion || "").toLowerCase().includes(search.toLowerCase());
-    const mf = filterStatus === "todos" || (filterStatus === "stock" && !i.fecha_venta) || (filterStatus === "vendidos" && !!i.fecha_venta);
-    const mc = filterCat === "todos" || i.categoria === filterCat;
-    return ms && mf && mc;
-  });
+  const logout = async () => { await supabase.auth.signOut(); };
+
+  const filtered = useMemo(() => {
+    const q = normalize(search);
+    return items.filter((i) => {
+      const ms = !q || normalize(i.nombre).includes(q) || normalize(i.ubicacion).includes(q);
+      const mf = filterStatus === "todos" || (filterStatus === "stock" && !i.fecha_venta) || (filterStatus === "vendidos" && !!i.fecha_venta);
+      const mc = filterCat === "todos" || i.categoria === filterCat;
+      return ms && mf && mc;
+    });
+  }, [items, search, filterStatus, filterCat]);
 
   const navBack = () => {
     if (view === "form" && selected) { setView("detail"); setEditing(null); }
@@ -479,14 +714,30 @@ export default function App() {
         ) : (
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: -0.5 }}>{isHistorial ? "Historial" : "Inventario"}</h1>
         )}
-        {!showingSubView && tab === "list" && items.length > 0 && (
-          <button onClick={() => { setView("form"); setEditing(null); setSelected(null); }} style={{ background: "#1D9E75", color: "#fff", border: "none", borderRadius: 12, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer", minHeight: 44 }}>+ Nuevo</button>
-        )}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {!showingSubView && tab === "list" && items.length > 0 && (
+            <button onClick={() => { setView("form"); setEditing(null); setSelected(null); }} style={{ background: "#1D9E75", color: "#fff", border: "none", borderRadius: 12, padding: "10px 16px", fontSize: 14, fontWeight: 600, cursor: "pointer", minHeight: 44 }}>+ Nuevo</button>
+          )}
+          {!showingSubView && (
+            <div style={{ position: "relative" }}>
+              <button onClick={() => setMenuOpen((v) => !v)} aria-label="Menú" style={{ background: "#F7F6F3", border: "none", borderRadius: 12, width: 44, height: 44, fontSize: 18, cursor: "pointer", fontFamily: "inherit" }}>⋯</button>
+              {menuOpen && (
+                <>
+                  <div onClick={() => setMenuOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 30 }} />
+                  <div style={{ position: "absolute", right: 0, top: 48, background: "#fff", borderRadius: 12, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", zIndex: 31, minWidth: 180, padding: 6 }}>
+                    <div style={{ padding: "8px 12px", fontSize: 11, color: "#888780", borderBottom: "1px solid #F1EFE8", marginBottom: 4, wordBreak: "break-all" }}>{session?.user?.email}</div>
+                    <button onClick={() => { setMenuOpen(false); logout(); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "10px 12px", fontSize: 14, fontWeight: 600, color: "#A32D2D", cursor: "pointer", borderRadius: 8, fontFamily: "inherit" }}>Cerrar sesión</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={{ flex: 1 }}>
         {loading ? <Spinner />
-          : view === "form" ? <ProductForm item={editing} onSave={save} onDelete={editing ? del : null} saving={saving} />
+          : view === "form" ? <ProductForm item={editing} onSave={save} onDelete={editing ? softDelete : null} onRequestDelete={requestDelete} saving={saving} onError={showError} />
           : view === "detail" && selected ? <DetailView item={selected} onEdit={() => { setEditing(selected); setView("form"); }} />
           : isHistorial ? <HistorialView items={items} />
           : items.length === 0 ? (
@@ -502,7 +753,7 @@ export default function App() {
               <input style={{ ...inp, marginBottom: 8 }} placeholder="Buscar por nombre o ubicación..." value={search} onChange={(e) => setSearch(e.target.value)} />
               <CategoryFilter value={filterCat} onChange={setFilterCat} items={items} />
               <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-                {["todos","stock","vendidos"].map((v) => (
+                {["todos", "stock", "vendidos"].map((v) => (
                   <button key={v} onClick={() => setFilterStatus(v)} style={{ background: filterStatus === v ? "#2C2C2A" : "#F7F6F3", color: filterStatus === v ? "#fff" : "#5F5E5A", border: "none", borderRadius: 20, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                     {v === "todos" ? "Todos" : v === "stock" ? "En stock" : "Vendidos"}
                   </button>
@@ -518,7 +769,32 @@ export default function App() {
       </div>
 
       {!showingSubView && <BottomNav tab={tab} setTab={(t) => { setTab(t); setView("list"); setSelected(null); }} />}
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      <Toast toast={toast} onClose={closeToast} />
+      <Modal open={!!confirmDialog} {...(confirmDialog || {})} />
     </div>
   );
+}
+
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: "100dvh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        <Spinner />
+      </div>
+    );
+  }
+  return session ? <InventoryApp session={session} /> : <AuthScreen />;
 }
