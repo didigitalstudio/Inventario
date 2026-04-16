@@ -164,11 +164,16 @@ function CategoryPicker({ value, onChange }) {
   );
 }
 
-function PaymentSection({ f, s }) {
+function PaymentSection({ f, s, showNote }) {
   const metodo = f.metodo_pago || "efectivo";
   return (
     <div style={{ background: "#F7F6F3", borderRadius: 14, padding: 14, marginBottom: 14 }}>
-      <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#5F5E5A", marginBottom: 8 }}>Método de pago</label>
+      <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#5F5E5A", marginBottom: showNote ? 4 : 8 }}>Método de pago</label>
+      {showNote && (
+        <p style={{ fontSize: 11, color: "#888780", margin: "0 0 10px", lineHeight: 1.4 }}>
+          Se guarda solo cuando marques el producto como vendido (completando Fecha venta).
+        </p>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: metodo !== "efectivo" ? 14 : 0 }}>
         {METODOS_PAGO.map((m) => (
           <button key={m.id} type="button" onClick={() => s("metodo_pago", m.id)} style={{
@@ -345,7 +350,7 @@ function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError 
           <Field label="Fecha compra"><input style={inp} type="date" value={f.fecha_compra} onChange={(e) => s("fecha_compra", e.target.value)} /></Field>
           <Field label="Fecha venta"><input style={inp} type="date" value={f.fecha_venta} onChange={(e) => s("fecha_venta", e.target.value)} /></Field>
         </div>
-        {f.fecha_venta && <PaymentSection f={f} s={s} />}
+        <PaymentSection f={f} s={s} showNote={!f.fecha_venta} />
       </div>
       <button disabled={saving} onClick={handleSave} style={{ width: "100%", background: saving ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 16, fontWeight: 600, cursor: saving ? "default" : "pointer", marginTop: 8, minHeight: 48 }}>
         {saving ? "Guardando..." : item ? "Guardar cambios" : "Agregar producto"}
