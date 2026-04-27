@@ -37,7 +37,7 @@ const MAX_PHOTO_MB = 5;
 const MAX_PHOTOS = 4;
 const FETCH_LIMIT = 500;
 const STALE_DAYS = 90;
-const AUTH_EMAIL = "izuralucas@gmail.com";
+const ONBOARDING_KEY = "inv:onboarding:v1";
 
 function formatCurrency(n) {
   return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n || 0);
@@ -1321,8 +1321,53 @@ function BottomNav({ tab, setTab }) {
   );
 }
 
-function AuthScreen() {
+function LandingPage({ onCta }) {
+  const features = [
+    { icon: "📦", title: "Inventario en stock", desc: "Foto, ubicación, precio de compra y antigüedad. Filtros por categoría, precio y fecha." },
+    { icon: "💰", title: "Ventas con detalle", desc: "Registrá comprador, fecha, precio y método de pago. Historial completo." },
+    { icon: "📄", title: "Cheques y vencimientos", desc: "Lista de cheques pendientes con banco, monto, titular y fecha de cobro." },
+    { icon: "📊", title: "Análisis financiero", desc: "Ganancia, ticket promedio, margen, ingresos por mes y top categorías." },
+    { icon: "💵", title: "Pesos y dólares", desc: "Cotización del día integrada. Ves todo en ARS y USD automáticamente." },
+    { icon: "📥", title: "Importar / exportar Excel", desc: "Migrá tu inventario actual o exportá para backup. Compatible con cualquier sistema." },
+  ];
+  return (
+    <div style={{ fontFamily: "'DM Sans','Segoe UI',-apple-system,sans-serif", color: "#2C2C2A", minHeight: "100dvh", background: "#fff" }}>
+      <style>{`
+        @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+        @keyframes spin{to{transform:rotate(360deg)}}
+      `}</style>
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: "48px 20px 60px" }}>
+        <div style={{ textAlign: "center", marginBottom: 40 }}>
+          <div style={{ fontSize: 56, marginBottom: 10 }}>📦</div>
+          <h1 style={{ fontSize: 38, fontWeight: 700, margin: "0 0 10px", letterSpacing: -0.5, lineHeight: 1.1 }}>Tu inventario,<br />simple y en la nube</h1>
+          <p style={{ fontSize: 17, color: "#5F5E5A", margin: 0, lineHeight: 1.5 }}>Pensado para negocios chicos: antigüedades, joyería, vintage, lo que vendas.<br />Funciona desde el celular como si fuera una app.</p>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 32, maxWidth: 360, marginLeft: "auto", marginRight: "auto" }}>
+          <button onClick={() => onCta("signup")} style={{ width: "100%", background: "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "18px 0", fontSize: 17, fontWeight: 700, cursor: "pointer", minHeight: 56, fontFamily: "inherit" }}>Crear cuenta</button>
+          <button onClick={() => onCta("signin")} style={{ width: "100%", background: "#fff", color: "#2C2C2A", border: "1px solid #C5C3B9", borderRadius: 14, padding: "16px 0", fontSize: 16, fontWeight: 600, cursor: "pointer", minHeight: 52, fontFamily: "inherit" }}>Ya tengo cuenta · Iniciar sesión</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
+          {features.map((f) => (
+            <div key={f.title} style={{ background: "#F7F6F3", borderRadius: 16, padding: "18px 20px" }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>{f.icon}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#2C2C2A", marginBottom: 4 }}>{f.title}</div>
+              <div style={{ fontSize: 14, color: "#5F5E5A", lineHeight: 1.45 }}>{f.desc}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ textAlign: "center", marginTop: 40, fontSize: 13, color: "#5F5E5A" }}>
+          <p style={{ margin: 0 }}>¿Dudas? Contactanos por WhatsApp o email para más info.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AuthScreen({ initialMode = "signin", onBack }) {
+  const [mode, setMode] = useState(initialMode);
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [inventoryName, setInventoryName] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState(null);
 
@@ -1331,39 +1376,86 @@ function AuthScreen() {
     setLoading(true);
     setMsg(null);
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email: AUTH_EMAIL, password });
-      if (error) throw error;
+      if (mode === "signin") {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email, password,
+          options: { data: { inventory_name: inventoryName.trim() || "Mi inventario" } },
+        });
+        if (error) throw error;
+        setMsg({ type: "success", text: "Cuenta creada. Si te pide confirmar el email te llega un mail; si no, ya entrás directo." });
+      }
     } catch (err) {
-      setMsg({ type: "error", text: "Contraseña incorrecta" });
+      setMsg({ type: "error", text: err.message || "Error de autenticación" });
     }
     setLoading(false);
   };
 
   return (
-    <div style={{ fontFamily: "'DM Sans','Segoe UI',-apple-system,sans-serif", maxWidth: 420, margin: "0 auto", padding: "60px 20px", color: "#2C2C2A", minHeight: "100dvh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+    <div style={{ fontFamily: "'DM Sans','Segoe UI',-apple-system,sans-serif", maxWidth: 420, margin: "0 auto", padding: "40px 20px", color: "#2C2C2A", minHeight: "100dvh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
       <style>{`
         @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
         @keyframes spin{to{transform:rotate(360deg)}}
       `}</style>
-      <div style={{ textAlign: "center", marginBottom: 40 }}>
+      {onBack && (
+        <button onClick={onBack} style={{ alignSelf: "flex-start", background: "none", border: "none", fontSize: 15, color: "#1D9E75", cursor: "pointer", padding: "8px 0", fontWeight: 700, fontFamily: "inherit", marginBottom: 20 }}>← Volver</button>
+      )}
+      <div style={{ textAlign: "center", marginBottom: 32 }}>
         <div style={{ fontSize: 56, marginBottom: 10 }}>📦</div>
-        <h1 style={{ fontSize: 34, fontWeight: 700, margin: "0 0 6px", letterSpacing: -0.5 }}>Casty</h1>
-        <p style={{ fontSize: 16, color: "#5F5E5A", margin: 0 }}>Ingresá la contraseña</p>
+        <h1 style={{ fontSize: 30, fontWeight: 700, margin: "0 0 6px", letterSpacing: -0.5 }}>Inventario</h1>
+        <p style={{ fontSize: 16, color: "#5F5E5A", margin: 0 }}>{mode === "signin" ? "Iniciá sesión para continuar" : "Crear cuenta nueva"}</p>
       </div>
       <form onSubmit={submit}>
-        <Field label="Contraseña"><input type="password" style={inp} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required autoFocus autoComplete="current-password" /></Field>
+        <Field label="Email"><input type="email" style={inp} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="tu@email.com" required autoComplete="email" /></Field>
+        <Field label="Contraseña"><input type="password" style={inp} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required minLength={6} autoComplete={mode === "signin" ? "current-password" : "new-password"} /></Field>
+        {mode === "signup" && (
+          <Field label="Nombre de tu inventario (opcional)"><input style={inp} value={inventoryName} onChange={(e) => setInventoryName(e.target.value)} placeholder="Ej: Antigüedades Pérez" /></Field>
+        )}
         {msg && (
-          <div style={{ background: "#FCEBEB", color: "#A32D2D", padding: "12px 14px", borderRadius: 12, fontSize: 15, fontWeight: 500, marginBottom: 14, lineHeight: 1.4 }}>{msg.text}</div>
+          <div style={{ background: msg.type === "error" ? "#FCEBEB" : "#EAF3DE", color: msg.type === "error" ? "#A32D2D" : "#3B6D11", padding: "12px 14px", borderRadius: 12, fontSize: 15, fontWeight: 500, marginBottom: 14, lineHeight: 1.4 }}>{msg.text}</div>
         )}
         <button type="submit" disabled={loading} style={{ width: "100%", background: loading ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "18px 0", fontSize: 18, fontWeight: 700, cursor: loading ? "default" : "pointer", marginTop: 6, minHeight: 56 }}>
-          {loading ? "..." : "Entrar"}
+          {loading ? "..." : mode === "signin" ? "Entrar" : "Crear cuenta"}
         </button>
       </form>
+      <button type="button" onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMsg(null); }} style={{ background: "none", border: "none", color: "#1D9E75", fontSize: 14, fontWeight: 700, cursor: "pointer", marginTop: 18, fontFamily: "inherit", textAlign: "center" }}>
+        {mode === "signin" ? "¿No tenés cuenta? Creá una" : "¿Ya tenés cuenta? Entrar"}
+      </button>
+    </div>
+  );
+}
+
+function OnboardingModal({ open, onClose, inventoryName }) {
+  if (!open) return null;
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 250, padding: 20, animation: "fadeIn 0.2s ease" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 18, padding: 28, maxWidth: 420, width: "100%" }}>
+        <div style={{ fontSize: 48, textAlign: "center", marginBottom: 12 }}>👋</div>
+        <h2 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 12px", textAlign: "center" }}>Bienvenido a {inventoryName}</h2>
+        <p style={{ fontSize: 15, color: "#5F5E5A", margin: "0 0 18px", lineHeight: 1.5, textAlign: "center" }}>Tu inventario está vacío. Te dejo 4 cosas para empezar:</p>
+        {[
+          { icon: "📦", text: "Tocá + Agregar para cargar tu primer producto." },
+          { icon: "💰", text: "Cuando vendas algo, abrí el detalle y tocá Marcar como vendido." },
+          { icon: "📄", text: "Si te pagan con cheque, lo vas a ver en la sección Cheques." },
+          { icon: "📊", text: "En Análisis ves la ganancia, margen y comparativa por mes." },
+        ].map((s, i) => (
+          <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 0", borderBottom: i < 3 ? "1px solid #F1EFE8" : "none" }}>
+            <span style={{ fontSize: 24 }}>{s.icon}</span>
+            <span style={{ fontSize: 15, color: "#2C2C2A", lineHeight: 1.4 }}>{s.text}</span>
+          </div>
+        ))}
+        <button onClick={onClose} style={{ width: "100%", background: "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "16px 0", fontSize: 17, fontWeight: 700, cursor: "pointer", marginTop: 20, minHeight: 56, fontFamily: "inherit" }}>
+          Empezar
+        </button>
+      </div>
     </div>
   );
 }
 
 function InventoryApp({ session }) {
+  const inventoryName = session?.user?.user_metadata?.inventory_name || "Mi inventario";
   const [items, setItems] = useState([]);
   const [tab, setTab] = useState("stock");
   const [view, setView] = useState("list"); // list | detail | form | sell
@@ -1379,6 +1471,17 @@ function InventoryApp({ session }) {
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  useEffect(() => {
+    // Mostrar onboarding solo una vez por user
+    const key = `${ONBOARDING_KEY}:${session?.user?.id}`;
+    if (session?.user?.id && !localStorage.getItem(key)) setShowOnboarding(true);
+  }, [session?.user?.id]);
+  const dismissOnboarding = () => {
+    setShowOnboarding(false);
+    if (session?.user?.id) localStorage.setItem(`${ONBOARDING_KEY}:${session.user.id}`, "1");
+  };
 
   const closeToast = useCallback(() => setToast(null), []);
   const showToast = useCallback((message, type = "success", action = null) => setToast({ message, type, action }), []);
@@ -1606,7 +1709,7 @@ function InventoryApp({ session }) {
 
   const headerTitle = showingSubView
     ? (view === "form" ? (editing ? "Editar producto" : "Nuevo producto") : view === "sell" ? (editing?.fecha_venta ? "Editar venta" : "Marcar como vendido") : "Detalle")
-    : (tab === "stock" ? "Inventario" : tab === "vendidos" ? "Vendidos" : tab === "cheques" ? "Cheques" : "Análisis");
+    : (tab === "stock" ? inventoryName : tab === "vendidos" ? "Vendidos" : tab === "cheques" ? "Cheques" : "Análisis");
 
   return (
     <div style={{ fontFamily: "'DM Sans','Segoe UI',-apple-system,sans-serif", maxWidth: 480, margin: "0 auto", padding: "0 16px", color: "#2C2C2A", minHeight: "100dvh", display: "flex", flexDirection: "column" }}>
@@ -1730,6 +1833,7 @@ function InventoryApp({ session }) {
       <Toast toast={toast} onClose={closeToast} />
       <Modal open={!!confirmDialog} {...(confirmDialog || {})} />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} onComplete={fetchItems} showError={showError} />
+      <OnboardingModal open={showOnboarding} onClose={dismissOnboarding} inventoryName={inventoryName} />
     </div>
   );
 }
@@ -1737,13 +1841,17 @@ function InventoryApp({ session }) {
 export default function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [publicView, setPublicView] = useState("landing"); // landing | signin | signup
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+      if (s) setPublicView("landing"); // reset para próximo logout
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -1755,5 +1863,7 @@ export default function App() {
       </div>
     );
   }
-  return session ? <InventoryApp session={session} /> : <AuthScreen />;
+  if (session) return <InventoryApp session={session} />;
+  if (publicView === "landing") return <LandingPage onCta={(mode) => setPublicView(mode)} />;
+  return <AuthScreen initialMode={publicView} onBack={() => setPublicView("landing")} />;
 }
