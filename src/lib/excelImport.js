@@ -399,26 +399,23 @@ export async function insertRowsInBatches(rows, onProgress) {
 export function downloadReport(report) {
   const wb = XLSX.utils.book_new();
 
-  const insertedNew = report.inserted.filter((r) => !r.originalSku).length;
-  const insertedAsDup = report.inserted.filter((r) => r.originalSku).length;
+  // Separar inserted: las que tenían originalSku son duplicadas importadas con SKU nuevo
+  const insertedNew = report.inserted.filter((r) => !r.originalSku);
+  const insertedAsDup = report.inserted.filter((r) => r.originalSku);
 
   const summary = [
     ["Reporte de importación"],
     ["Fecha", new Date().toLocaleString("es-AR")],
     [],
     ["Filas procesadas", report.totalProcessed],
-    ["Importadas (nuevas)", insertedNew],
-    ["Importadas como duplicado (SKU auto-numerado)", insertedAsDup],
+    ["Importadas (nuevas)", insertedNew.length],
+    ["Importadas como duplicado (SKU auto-numerado)", insertedAsDup.length],
     ["Salteadas (duplicados sin importar)", report.duplicates.length],
     ["Con error", report.invalid.length + report.failed.length],
   ];
   const wsSum = XLSX.utils.aoa_to_sheet(summary);
   wsSum["!cols"] = [{ wch: 28 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, wsSum, "Resumen");
-
-  // Separar inserted: las que tenían originalSku son duplicadas importadas con SKU nuevo
-  const insertedNew = report.inserted.filter((r) => !r.originalSku);
-  const insertedAsDup = report.inserted.filter((r) => r.originalSku);
 
   if (insertedNew.length) {
     const data = [["Fila", "SKU", "Nombre"], ...insertedNew.map((r) => [r.rowNumber, r.sku, r.nombre])];
