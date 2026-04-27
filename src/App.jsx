@@ -163,6 +163,70 @@ function DolarBadge() {
   );
 }
 
+// Toggle ARS/USD para entrada de precio. Mantiene un valor "displayed" en la moneda
+// elegida y un "ars" derivado. El componente le entrega siempre el valor ARS al padre.
+function PrecioWithCurrency({ valueArs, onChangeArs, cotizacion, label, placeholder = "0" }) {
+  const [moneda, setMoneda] = useState("ARS");
+  const [displayValue, setDisplayValue] = useState(valueArs ?? "");
+  const lastSyncedRef = useRef({ valueArs, moneda: "ARS", cotizacion });
+
+  // Si cambia el valueArs externo (ej. al editar producto existente), reflejarlo.
+  useEffect(() => {
+    if (lastSyncedRef.current.valueArs !== valueArs) {
+      // recalcular display según moneda actual
+      if (moneda === "ARS") setDisplayValue(valueArs ?? "");
+      else if (cotizacion) setDisplayValue(valueArs ? Number((Number(valueArs) / Number(cotizacion)).toFixed(2)) : "");
+      lastSyncedRef.current.valueArs = valueArs;
+    }
+  }, [valueArs, moneda, cotizacion]);
+
+  const handleChange = (val) => {
+    setDisplayValue(val);
+    if (val === "" || val === null) { onChangeArs(""); return; }
+    const num = Number(val);
+    if (isNaN(num)) return;
+    const ars = moneda === "ARS" ? num : (cotizacion ? num * Number(cotizacion) : num);
+    onChangeArs(ars);
+  };
+
+  const switchMoneda = (newMoneda) => {
+    if (newMoneda === moneda) return;
+    // Si tenemos cotización, convertir el display al equivalente
+    if (cotizacion && displayValue !== "" && !isNaN(Number(displayValue))) {
+      const current = Number(displayValue);
+      const newDisplay = newMoneda === "USD" && moneda === "ARS"
+        ? Number((current / Number(cotizacion)).toFixed(2))
+        : Number((current * Number(cotizacion)).toFixed(2));
+      setDisplayValue(newDisplay);
+    }
+    setMoneda(newMoneda);
+  };
+
+  // Si no hay cotización aún y user toca USD, le avisamos
+  const needsCotizacionForUsd = moneda === "USD" && !cotizacion;
+  const equivalent = displayValue !== "" && !isNaN(Number(displayValue)) && cotizacion
+    ? (moneda === "ARS"
+        ? `≈ ${formatUSD(Number(displayValue) / Number(cotizacion))}`
+        : `≈ ${formatCurrency(Number(displayValue) * Number(cotizacion))}`)
+    : null;
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#3F3E3A", marginBottom: 7 }}>{label}</label>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input style={{ ...inp, flex: 1 }} type="number" inputMode="numeric" min="0" value={displayValue} onChange={(e) => handleChange(e.target.value)} placeholder={placeholder} />
+        <div style={{ display: "flex", border: "1px solid #C5C3B9", borderRadius: 12, overflow: "hidden" }}>
+          {["ARS", "USD"].map((m) => (
+            <button key={m} type="button" onClick={() => switchMoneda(m)} style={{ background: moneda === m ? "#1D9E75" : "#fff", color: moneda === m ? "#fff" : "#5F5E5A", border: "none", padding: "0 16px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", minWidth: 56 }}>{m}</button>
+          ))}
+        </div>
+      </div>
+      {equivalent && <div style={{ fontSize: 13, color: "#0F6E56", fontWeight: 600, marginTop: 6 }}>{equivalent}</div>}
+      {needsCotizacionForUsd && <div style={{ fontSize: 12, color: "#A35B0A", marginTop: 6 }}>⚠️ Cargá la fecha primero para que se busque la cotización del día.</div>}
+    </div>
+  );
+}
+
 // Bloque para mostrar cotización del día seleccionado en un form de fecha + precio
 function CotizacionField({ fecha, cotizacion, onCotizacionChange, precioArs, label }) {
   const [loading, setLoading] = useState(false);
@@ -340,10 +404,10 @@ function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError 
       <Field label="Nombre del producto"><input style={inp} value={f.nombre} onChange={(e) => s("nombre", e.target.value)} placeholder="Ej: Reloj Longines 1940" /></Field>
       <CategoryPicker value={f.categoria} onChange={(v) => s("categoria", v)} />
       <Field label="Descripción"><textarea style={{ ...inp, minHeight: 65, resize: "vertical" }} value={f.descripcion} onChange={(e) => s("descripcion", e.target.value)} placeholder="Materiales, época, estado..." /></Field>
-      <Field label="Precio de compra (ARS)"><input style={inp} type="number" inputMode="numeric" min="0" value={f.precio_compra} onChange={(e) => s("precio_compra", e.target.value)} placeholder="0" /></Field>
       <Field label="Ubicación"><input style={inp} value={f.ubicacion} onChange={(e) => s("ubicacion", e.target.value)} placeholder="Ej: Vitrina 3, Estante A" /></Field>
       <Field label="Fecha de compra"><input style={inp} type="date" value={f.fecha_compra} onChange={(e) => s("fecha_compra", e.target.value)} /></Field>
       <CotizacionField fecha={f.fecha_compra} cotizacion={f.cotizacion_compra} onCotizacionChange={(v) => s("cotizacion_compra", v)} precioArs={f.precio_compra} label="Cotización del día de compra" />
+      <PrecioWithCurrency label="Precio de compra" valueArs={f.precio_compra} onChangeArs={(v) => s("precio_compra", v)} cotizacion={f.cotizacion_compra} />
       <button disabled={saving} onClick={handleSave} style={{ width: "100%", background: saving ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "18px 0", fontSize: 18, fontWeight: 700, cursor: saving ? "default" : "pointer", marginTop: 12, minHeight: 56 }}>
         {saving ? "Guardando..." : item ? "Guardar cambios" : "Agregar a stock"}
       </button>
@@ -417,11 +481,9 @@ function SellForm({ item, onSave, saving, onError, isEdit }) {
           <p style={{ fontSize: 12, color: "#5F5E5A", margin: "2px 0 0" }}>Compra: {formatCurrency(item.precio_compra)}</p>
         </div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="Fecha de venta"><input style={inp} type="date" value={f.fecha_venta} onChange={(e) => s("fecha_venta", e.target.value)} /></Field>
-        <Field label="Precio de venta (ARS)"><input style={inp} type="number" inputMode="numeric" min="0" value={f.precio_venta} onChange={(e) => s("precio_venta", e.target.value)} placeholder="0" /></Field>
-      </div>
+      <Field label="Fecha de venta"><input style={inp} type="date" value={f.fecha_venta} onChange={(e) => s("fecha_venta", e.target.value)} /></Field>
       <CotizacionField fecha={f.fecha_venta} cotizacion={f.cotizacion_venta} onCotizacionChange={(v) => s("cotizacion_venta", v)} precioArs={f.precio_venta} label="Cotización del día de venta" />
+      <PrecioWithCurrency label="Precio de venta" valueArs={f.precio_venta} onChangeArs={(v) => s("precio_venta", v)} cotizacion={f.cotizacion_venta} />
       <Field label="Comprador (opcional)"><input style={inp} value={f.comprador_nombre} onChange={(e) => s("comprador_nombre", e.target.value)} placeholder="Ej: Juan Pérez" /></Field>
       <Field label="Teléfono (opcional)"><input style={inp} type="tel" inputMode="tel" value={f.comprador_telefono} onChange={(e) => s("comprador_telefono", e.target.value)} placeholder="Ej: 11 5555 1234" /></Field>
       <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#3F3E3A", marginBottom: 10 }}>Método de pago</label>
