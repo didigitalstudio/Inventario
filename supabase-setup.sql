@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS productos (
   cheque_titular TEXT,
   cheque_cobrado_at TIMESTAMPTZ,
   sku TEXT,
+  cotizacion_compra NUMERIC(12,2),
+  cotizacion_venta NUMERIC(12,2),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -47,6 +49,8 @@ ALTER TABLE productos ADD COLUMN IF NOT EXISTS comprador_telefono TEXT;
 ALTER TABLE productos ADD COLUMN IF NOT EXISTS cheque_titular TEXT;
 ALTER TABLE productos ADD COLUMN IF NOT EXISTS cheque_cobrado_at TIMESTAMPTZ;
 ALTER TABLE productos ADD COLUMN IF NOT EXISTS sku TEXT;
+ALTER TABLE productos ADD COLUMN IF NOT EXISTS cotizacion_compra NUMERIC(12,2);
+ALTER TABLE productos ADD COLUMN IF NOT EXISTS cotizacion_venta NUMERIC(12,2);
 
 -- Indice unico parcial para SKU: NULL no choca, soft-deleted no choca
 CREATE UNIQUE INDEX IF NOT EXISTS idx_productos_sku_unique

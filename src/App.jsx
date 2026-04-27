@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "./supabaseClient";
 import { downloadTemplate, parseExcelFile, analyzeRows, resolveSkuConflicts, insertRowsInBatches, downloadReport, exportProductsToExcel, getNextAutoSkus } from "./lib/excelImport";
+import { getCurrentDolar, getDolarForDate, formatUSD, arsToUsd } from "./lib/dolarApi";
 
 const CATEGORIAS = [
   { id: "relojes", label: "Relojes", icon: "⌚" },
@@ -145,6 +146,69 @@ function Modal({ open, title, message, confirmText = "Confirmar", cancelText = "
 
 const inp = { width: "100%", boxSizing: "border-box", padding: "14px 16px", fontSize: 17, border: "1px solid #C5C3B9", borderRadius: 12, background: "#fff", color: "#2C2C2A", outline: "none", fontFamily: "inherit", WebkitAppearance: "none", appearance: "none", minHeight: 52 };
 
+function DolarBadge() {
+  const [rate, setRate] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setRate(await getCurrentDolar("blue")); } catch {}
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  if (!rate && !loading) return null;
+  return (
+    <button onClick={load} title="Cotización dólar blue (tap para refrescar)" style={{ background: "#EAF3DE", border: "1px solid #CFE3B3", color: "#3B6D11", borderRadius: 20, padding: "6px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+      💵 {loading ? "..." : `$${Math.round(rate.venta).toLocaleString("es-AR")}`}
+    </button>
+  );
+}
+
+// Bloque para mostrar cotización del día seleccionado en un form de fecha + precio
+function CotizacionField({ fecha, cotizacion, onCotizacionChange, precioArs, label }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const lastFetchedFecha = useRef(null);
+
+  useEffect(() => {
+    if (!fecha) { setError(null); return; }
+    if (lastFetchedFecha.current === fecha) return;
+    if (cotizacion) { lastFetchedFecha.current = fecha; return; } // ya tiene una guardada
+    lastFetchedFecha.current = fecha;
+    setLoading(true);
+    setError(null);
+    getDolarForDate(fecha, "blue")
+      .then((r) => { onCotizacionChange(r.venta, r); setLoading(false); })
+      .catch((e) => { setError(e.message); setLoading(false); });
+  }, [fecha]); // intencional: solo reaccionar al cambio de fecha
+
+  if (!fecha) return null;
+  const usd = precioArs && cotizacion ? arsToUsd(Number(precioArs), Number(cotizacion)) : null;
+
+  return (
+    <div style={{ background: "#F1F5F9", borderRadius: 12, padding: "12px 14px", marginBottom: 14, marginTop: -8 }}>
+      <div style={{ fontSize: 12, color: "#5F5E5A", fontWeight: 600, marginBottom: 6 }}>{label}</div>
+      {loading ? (
+        <div style={{ fontSize: 14, color: "#5F5E5A" }}>Cargando cotización del día...</div>
+      ) : error ? (
+        <div style={{ fontSize: 13, color: "#A35B0A" }}>⚠️ {error}. Podés cargarla manual.</div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: usd ? 6 : 0 }}>
+            <span style={{ fontSize: 13, color: "#3F3E3A" }}>💵 Dólar blue:</span>
+            <input type="number" inputMode="decimal" min="0" step="0.01" value={cotizacion || ""} onChange={(e) => onCotizacionChange(e.target.value === "" ? null : Number(e.target.value), null)} placeholder="0.00" style={{ ...inp, padding: "6px 10px", fontSize: 14, minHeight: 32, width: 120, display: "inline-block" }} />
+            <span style={{ fontSize: 12, color: "#5F5E5A" }}>ARS por USD</span>
+          </div>
+          {usd != null && (
+            <div style={{ fontSize: 14, color: "#0F6E56", fontWeight: 700 }}>
+              ≈ {formatUSD(usd)}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function Field({ label, children }) {
   return (
     <div style={{ marginBottom: 16 }}>
@@ -252,6 +316,7 @@ function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError 
     fecha_compra: item?.fecha_compra || "",
     fotos_urls: item?.fotos_urls || [],
     categoria: item?.categoria || "otros",
+    cotizacion_compra: item?.cotizacion_compra ?? null,
   });
   const s = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
@@ -264,6 +329,7 @@ function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError 
       precio_compra: Number(f.precio_compra) || 0,
       fecha_compra: f.fecha_compra || null,
       fotos_urls: f.fotos_urls || [],
+      cotizacion_compra: f.cotizacion_compra ? Number(f.cotizacion_compra) : null,
     });
   };
 
@@ -274,9 +340,10 @@ function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError 
       <Field label="Nombre del producto"><input style={inp} value={f.nombre} onChange={(e) => s("nombre", e.target.value)} placeholder="Ej: Reloj Longines 1940" /></Field>
       <CategoryPicker value={f.categoria} onChange={(v) => s("categoria", v)} />
       <Field label="Descripción"><textarea style={{ ...inp, minHeight: 65, resize: "vertical" }} value={f.descripcion} onChange={(e) => s("descripcion", e.target.value)} placeholder="Materiales, época, estado..." /></Field>
-      <Field label="Precio de compra ($)"><input style={inp} type="number" inputMode="numeric" min="0" value={f.precio_compra} onChange={(e) => s("precio_compra", e.target.value)} placeholder="0" /></Field>
+      <Field label="Precio de compra (ARS)"><input style={inp} type="number" inputMode="numeric" min="0" value={f.precio_compra} onChange={(e) => s("precio_compra", e.target.value)} placeholder="0" /></Field>
       <Field label="Ubicación"><input style={inp} value={f.ubicacion} onChange={(e) => s("ubicacion", e.target.value)} placeholder="Ej: Vitrina 3, Estante A" /></Field>
       <Field label="Fecha de compra"><input style={inp} type="date" value={f.fecha_compra} onChange={(e) => s("fecha_compra", e.target.value)} /></Field>
+      <CotizacionField fecha={f.fecha_compra} cotizacion={f.cotizacion_compra} onCotizacionChange={(v) => s("cotizacion_compra", v)} precioArs={f.precio_compra} label="Cotización del día de compra" />
       <button disabled={saving} onClick={handleSave} style={{ width: "100%", background: saving ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "18px 0", fontSize: 18, fontWeight: 700, cursor: saving ? "default" : "pointer", marginTop: 12, minHeight: 56 }}>
         {saving ? "Guardando..." : item ? "Guardar cambios" : "Agregar a stock"}
       </button>
@@ -304,6 +371,7 @@ function SellForm({ item, onSave, saving, onError, isEdit }) {
     cheque_monto: item?.cheque_monto ?? "",
     cheque_fecha_cobro: item?.cheque_fecha_cobro || "",
     cheque_titular: item?.cheque_titular || "",
+    cotizacion_venta: item?.cotizacion_venta ?? null,
   });
   const s = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
@@ -332,6 +400,7 @@ function SellForm({ item, onSave, saving, onError, isEdit }) {
       cheque_fecha_cobro: f.metodo_pago === "cheque" ? (f.cheque_fecha_cobro || null) : null,
       cheque_titular: f.metodo_pago === "cheque" ? (f.cheque_titular || null) : null,
       cheque_cobrado_at: f.metodo_pago === "cheque" ? (item.cheque_cobrado_at || null) : null,
+      cotizacion_venta: f.cotizacion_venta ? Number(f.cotizacion_venta) : null,
     });
   };
 
@@ -350,8 +419,9 @@ function SellForm({ item, onSave, saving, onError, isEdit }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <Field label="Fecha de venta"><input style={inp} type="date" value={f.fecha_venta} onChange={(e) => s("fecha_venta", e.target.value)} /></Field>
-        <Field label="Precio de venta ($)"><input style={inp} type="number" inputMode="numeric" min="0" value={f.precio_venta} onChange={(e) => s("precio_venta", e.target.value)} placeholder="0" /></Field>
+        <Field label="Precio de venta (ARS)"><input style={inp} type="number" inputMode="numeric" min="0" value={f.precio_venta} onChange={(e) => s("precio_venta", e.target.value)} placeholder="0" /></Field>
       </div>
+      <CotizacionField fecha={f.fecha_venta} cotizacion={f.cotizacion_venta} onCotizacionChange={(v) => s("cotizacion_venta", v)} precioArs={f.precio_venta} label="Cotización del día de venta" />
       <Field label="Comprador (opcional)"><input style={inp} value={f.comprador_nombre} onChange={(e) => s("comprador_nombre", e.target.value)} placeholder="Ej: Juan Pérez" /></Field>
       <Field label="Teléfono (opcional)"><input style={inp} type="tel" inputMode="tel" value={f.comprador_telefono} onChange={(e) => s("comprador_telefono", e.target.value)} placeholder="Ej: 11 5555 1234" /></Field>
       <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#3F3E3A", marginBottom: 10 }}>Método de pago</label>
@@ -397,6 +467,9 @@ function ProductCard({ item, onClick }) {
   const cat = getCat(item.categoria);
   const foto = firstPhoto(item);
   const stale = !item.fecha_venta ? staleDays(item) : 0;
+  const arsShown = item.fecha_venta ? item.precio_venta : item.precio_compra;
+  const cotShown = item.fecha_venta ? item.cotizacion_venta : item.cotizacion_compra;
+  const usdShown = arsToUsd(arsShown, cotShown);
   return (
     <div role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }} style={{ display: "flex", gap: 14, padding: "14px 0", borderBottom: "1px solid #E5E3DB", cursor: "pointer", outline: "none" }}>
       <div style={{ width: 72, height: 72, minWidth: 72, borderRadius: 12, overflow: "hidden", background: foto ? `url(${foto}) center/cover no-repeat` : "#F7F6F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30 }}>
@@ -418,7 +491,8 @@ function ProductCard({ item, onClick }) {
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
           <span style={{ fontSize: 16, fontWeight: 700, color: "#2C2C2A" }}>
-            {item.fecha_venta ? formatCurrency(item.precio_venta) : formatCurrency(item.precio_compra)}
+            {formatCurrency(arsShown)}
+            {usdShown != null && <span style={{ fontSize: 12, color: "#3B6D11", fontWeight: 600, marginLeft: 6 }}>· {formatUSD(usdShown)}</span>}
           </span>
           {profit !== null && <span style={{ fontSize: 14, fontWeight: 700, color: profit >= 0 ? "#0F6E56" : "#A32D2D" }}>{profit >= 0 ? "+" : ""}{formatCurrency(profit)}</span>}
         </div>
@@ -651,24 +725,50 @@ function DetailView({ item, onEditProduct, onMarkSold, onEditSale, onUnsell, onM
       </div>
       {item.descripcion && <p style={{ fontSize: 14, color: "#5F5E5A", margin: "0 0 16px", lineHeight: 1.5 }}>{item.descripcion}</p>}
 
-      <div style={{ display: "grid", gridTemplateColumns: isSold ? "1fr 1fr" : "1fr", gap: 8, marginBottom: 10 }}>
-        <div style={{ background: "#F7F6F3", borderRadius: 12, padding: "12px" }}>
-          <div style={{ fontSize: 11, color: "#5F5E5A", marginBottom: 2 }}>Precio compra</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#2C2C2A" }}>{formatCurrency(item.precio_compra)}</div>
-        </div>
-        {isSold && (
-          <div style={{ background: "#F7F6F3", borderRadius: 12, padding: "12px" }}>
-            <div style={{ fontSize: 11, color: "#5F5E5A", marginBottom: 2 }}>Precio venta</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "#1D9E75" }}>{formatCurrency(item.precio_venta)}</div>
-          </div>
-        )}
-      </div>
-      {profit !== null && (
-        <div style={{ background: profit >= 0 ? "#EAF3DE" : "#FCEBEB", borderRadius: 12, padding: "10px 14px", display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: profit >= 0 ? "#3B6D11" : "#A32D2D" }}>{profit >= 0 ? "Ganancia" : "Pérdida"}</span>
-          <span style={{ fontSize: 16, fontWeight: 700, color: profit >= 0 ? "#3B6D11" : "#A32D2D" }}>{profit >= 0 ? "+" : ""}{formatCurrency(profit)}</span>
-        </div>
-      )}
+      {(() => {
+        const compraUsd = arsToUsd(item.precio_compra, item.cotizacion_compra);
+        const ventaUsd = isSold ? arsToUsd(item.precio_venta, item.cotizacion_venta) : null;
+        const gananciaUsd = isSold && compraUsd != null && ventaUsd != null ? ventaUsd - compraUsd : null;
+        return (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: isSold ? "1fr 1fr" : "1fr", gap: 8, marginBottom: 10 }}>
+              <div style={{ background: "#F7F6F3", borderRadius: 12, padding: "12px" }}>
+                <div style={{ fontSize: 11, color: "#5F5E5A", marginBottom: 2 }}>Precio compra</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#2C2C2A" }}>{formatCurrency(item.precio_compra)}</div>
+                {compraUsd != null && (
+                  <div style={{ fontSize: 12, color: "#3B6D11", fontWeight: 600, marginTop: 2 }}>
+                    💵 {formatUSD(compraUsd)} <span style={{ color: "#5F5E5A", fontWeight: 500 }}>· cotiz. ${Math.round(item.cotizacion_compra).toLocaleString("es-AR")}</span>
+                  </div>
+                )}
+              </div>
+              {isSold && (
+                <div style={{ background: "#F7F6F3", borderRadius: 12, padding: "12px" }}>
+                  <div style={{ fontSize: 11, color: "#5F5E5A", marginBottom: 2 }}>Precio venta</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#1D9E75" }}>{formatCurrency(item.precio_venta)}</div>
+                  {ventaUsd != null && (
+                    <div style={{ fontSize: 12, color: "#3B6D11", fontWeight: 600, marginTop: 2 }}>
+                      💵 {formatUSD(ventaUsd)} <span style={{ color: "#5F5E5A", fontWeight: 500 }}>· cotiz. ${Math.round(item.cotizacion_venta).toLocaleString("es-AR")}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            {profit !== null && (
+              <div style={{ background: profit >= 0 ? "#EAF3DE" : "#FCEBEB", borderRadius: 12, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: profit >= 0 ? "#3B6D11" : "#A32D2D" }}>{profit >= 0 ? "Ganancia" : "Pérdida"}</span>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: profit >= 0 ? "#3B6D11" : "#A32D2D" }}>{profit >= 0 ? "+" : ""}{formatCurrency(profit)}</div>
+                  {gananciaUsd != null && (
+                    <div style={{ fontSize: 12, color: gananciaUsd >= 0 ? "#3B6D11" : "#A32D2D", fontWeight: 600 }}>
+                      {gananciaUsd >= 0 ? "+" : ""}{formatUSD(gananciaUsd)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
       <div style={{ borderTop: "1px solid #F1EFE8", paddingTop: 12 }}>
         {[
           { label: "SKU", value: item.sku },
@@ -878,7 +978,13 @@ function AnalisisView({ items }) {
     });
     const topCats = Object.entries(porCategoria).sort((a, b) => b[1].ganancia - a[1].ganancia).slice(0, 5);
 
-    return { invertido, totalVendido, ganancia, ticketProm, margenProm, gananciaMes, ventasMesCount: ventasMes.length, chequesCount: chequesPend.length, chequesMonto, meses, porMes, topCats, vendidosCount: vendidos.length, stockCount: stock.length };
+    // USD totals (solo cuenta lo que tiene cotización guardada)
+    const invertidoUsd = stock.reduce((s, i) => s + (arsToUsd(i.precio_compra, i.cotizacion_compra) || 0), 0);
+    const ingresosUsd = vendidos.reduce((s, i) => s + (arsToUsd(i.precio_venta, i.cotizacion_venta) || 0), 0);
+    const costoVendidoUsd = vendidos.reduce((s, i) => s + (arsToUsd(i.precio_compra, i.cotizacion_compra) || 0), 0);
+    const gananciaUsd = ingresosUsd - costoVendidoUsd;
+
+    return { invertido, totalVendido, ganancia, ticketProm, margenProm, gananciaMes, ventasMesCount: ventasMes.length, chequesCount: chequesPend.length, chequesMonto, meses, porMes, topCats, vendidosCount: vendidos.length, stockCount: stock.length, invertidoUsd, ingresosUsd, gananciaUsd };
   }, [items]);
 
   const StatCard = ({ icon, label, value, color }) => (
@@ -904,6 +1010,14 @@ function AnalisisView({ items }) {
         <StatCard icon="💸" label="Ingresos totales" value={formatCurrency(stats.totalVendido)} color="#2C2C2A" />
         <StatCard icon="🎟️" label="Ticket promedio" value={formatCurrency(stats.ticketProm)} color="#2C2C2A" />
         <StatCard icon="📊" label="Margen promedio" value={`${stats.margenProm.toFixed(1)}%`} color={stats.margenProm >= 0 ? "#0F6E56" : "#A32D2D"} />
+      </div>
+
+      <h2 style={{ fontSize: 15, fontWeight: 700, color: "#3F3E3A", margin: "4px 0 10px" }}>En dólares (a la cotización del día de cada operación)</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
+        <StatCard icon="💵" label="Invertido (USD)" value={formatUSD(stats.invertidoUsd)} color="#854F0B" />
+        <StatCard icon="💸" label="Ingresos (USD)" value={formatUSD(stats.ingresosUsd)} color="#2C2C2A" />
+        <StatCard icon="📈" label="Ganancia (USD)" value={formatUSD(stats.gananciaUsd)} color={stats.gananciaUsd >= 0 ? "#0F6E56" : "#A32D2D"} />
+        <StatCard icon="ℹ️" label="Nota" value="Solo cuenta productos con cotización" color="#5F5E5A" />
       </div>
 
       <h2 style={{ fontSize: 15, fontWeight: 700, color: "#3F3E3A", margin: "4px 0 10px" }}>Este mes</h2>
@@ -1292,6 +1406,10 @@ function InventoryApp({ session }) {
         const [autoSku] = await getNextAutoSkus(1);
         product.sku = autoSku;
       }
+      // Auto-fetch cotización si hay fecha_compra pero no cotización
+      if (product.fecha_compra && !product.cotizacion_compra) {
+        try { const r = await getDolarForDate(product.fecha_compra, "blue"); product.cotizacion_compra = r.venta; } catch {}
+      }
       if (product.id) {
         const { id, created_at, updated_at, ...updates } = product;
         const { error } = await supabase.from("productos").update(updates).eq("id", id);
@@ -1317,6 +1435,10 @@ function InventoryApp({ session }) {
   const saveSale = async (saleData) => {
     setSaving(true);
     try {
+      // Auto-fetch cotización si quedó sin
+      if (saleData.fecha_venta && !saleData.cotizacion_venta) {
+        try { const r = await getDolarForDate(saleData.fecha_venta, "blue"); saleData.cotizacion_venta = r.venta; } catch {}
+      }
       const { id, ...updates } = saleData;
       const { error } = await supabase.from("productos").update(updates).eq("id", id);
       if (error) throw error;
@@ -1510,6 +1632,7 @@ function InventoryApp({ session }) {
           <>
             <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: -0.5 }}>{headerTitle}</h1>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <DolarBadge />
               {tab === "stock" && (
                 <button onClick={() => { setView("form"); setEditing(null); setSelected(null); }} style={{ background: "#1D9E75", color: "#fff", border: "none", borderRadius: 12, padding: "12px 18px", fontSize: 15, fontWeight: 700, cursor: "pointer", minHeight: 48 }}>+ Agregar</button>
               )}

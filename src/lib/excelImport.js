@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
+import { getDolarForDate } from "./dolarApi";
 
 // IDs de categorias soportadas (deben coincidir con CATEGORIAS de App.jsx)
 export const CATEGORIA_IDS = [
@@ -13,8 +14,8 @@ export const METODO_PAGO_IDS = ["efectivo", "transferencia", "cheque"];
 // Headers en el orden que aparecen en la plantilla
 export const HEADERS = [
   "sku", "nombre", "categoria", "descripcion",
-  "precio_compra", "ubicacion", "fecha_compra",
-  "fecha_venta", "precio_venta", "metodo_pago",
+  "precio_compra", "cotizacion_compra", "ubicacion", "fecha_compra",
+  "fecha_venta", "precio_venta", "cotizacion_venta", "metodo_pago",
   "comprador_nombre", "comprador_telefono", "pago_nota",
   "cheque_banco", "cheque_titular", "cheque_numero", "cheque_monto", "cheque_fecha_cobro",
 ];
@@ -147,17 +148,31 @@ function validateRow(raw, rowNumber) {
   const cheque_monto = metodo_pago === "cheque" && raw.cheque_monto !== "" && raw.cheque_monto !== undefined && raw.cheque_monto !== null
     ? parseNumber(raw.cheque_monto) : null;
 
+  // Cotizaciones (opcional). Si vienen, se parsean. Si no, se auto-fetch en analyzeRows si hay fecha.
+  const cotizacion_compra = raw.cotizacion_compra === "" || raw.cotizacion_compra == null
+    ? null : parseNumber(raw.cotizacion_compra);
+  if (cotizacion_compra !== null && (isNaN(cotizacion_compra) || cotizacion_compra <= 0)) errors.push("Cotización de compra inválida");
+  const cotizacion_venta = raw.cotizacion_venta === "" || raw.cotizacion_venta == null
+    ? null : parseNumber(raw.cotizacion_venta);
+  if (cotizacion_venta !== null && (isNaN(cotizacion_venta) || cotizacion_venta <= 0)) errors.push("Cotización de venta inválida");
+
+  if (errors.length > 0) {
+    return { ok: false, rowNumber, sku, nombre, errors };
+  }
+
   const normalized = {
     sku: sku || null, // si quedó vacío, será auto-generado en analyzeRows
     nombre,
     descripcion: get("descripcion") || "",
     categoria,
     precio_compra: precio_compra || 0,
+    cotizacion_compra: cotizacion_compra || null,
     ubicacion: get("ubicacion") || "",
     fecha_compra: fecha_compra || null,
     fotos_urls: [],
     fecha_venta: hasFechaVenta ? fecha_venta : null,
     precio_venta: hasFechaVenta ? precio_venta : 0,
+    cotizacion_venta: hasFechaVenta ? (cotizacion_venta || null) : null,
     metodo_pago: metodo_pago || null,
     pago_nota: metodo_pago === "transferencia" ? (get("pago_nota") || null) : null,
     cheque_banco: metodo_pago === "cheque" ? cheque_banco : null,
@@ -175,10 +190,10 @@ function validateRow(raw, rowNumber) {
 
 export function downloadTemplate() {
   const headers = HEADERS;
-  // Ejemplo 1: producto en stock (mínimo)
-  const ejemplo1 = ["ANT-001", "Reloj Longines década del 40", "relojes", "Caja oro 18k, mecánico", 80000, "Vitrina 1", "2026-01-10", "", "", "", "", "", "", "", "", "", "", ""];
-  // Ejemplo 2: producto vendido con cheque
-  const ejemplo2 = ["ANT-002", "Cuadro óleo sobre tela", "cuadros", "Paisaje pampeano firmado", 120000, "Pared este", "2026-02-18", "2026-03-25", 250000, "cheque", "Ana Costa", "11 5532 1188", "", "Santander", "Ana Costa", "0078123", 250000, "2026-04-15"];
+  // Ejemplo 1: producto en stock (mínimo). Cotización vacía = se busca de DolarAPI al importar.
+  const ejemplo1 = ["ANT-001", "Reloj Longines década del 40", "relojes", "Caja oro 18k, mecánico", 80000, "", "Vitrina 1", "2026-01-10", "", "", "", "", "", "", "", "", "", "", "", ""];
+  // Ejemplo 2: producto vendido con cheque, cotizaciones explícitas
+  const ejemplo2 = ["ANT-002", "Cuadro óleo sobre tela", "cuadros", "Paisaje pampeano firmado", 120000, 1180, "Pared este", "2026-02-18", "2026-03-25", 250000, 1240, "cheque", "Ana Costa", "11 5532 1188", "", "Santander", "Ana Costa", "0078123", 250000, "2026-04-15"];
 
   const wsProductos = XLSX.utils.aoa_to_sheet([headers, ejemplo1, ejemplo2]);
   wsProductos["!cols"] = headers.map((h) => ({ wch: Math.max(h.length, 14) }));
@@ -189,11 +204,13 @@ export function downloadTemplate() {
     ["nombre", "SÍ", "Texto. Nombre del producto."],
     ["categoria", "No", `Una de: ${CATEGORIA_IDS.join(", ")}. Default: otros.`],
     ["descripcion", "No", "Texto libre."],
-    ["precio_compra", "No", "Número (sin símbolo $). Default: 0."],
+    ["precio_compra", "No", "Número en ARS (sin símbolo $). Default: 0."],
+    ["cotizacion_compra", "No", "ARS por USD del día de compra. Si vacío y hay fecha_compra, se busca automáticamente del dólar blue."],
     ["ubicacion", "No", "Texto. Ej: Vitrina 3, Estante A."],
     ["fecha_compra", "No", "Formato YYYY-MM-DD (ej. 2026-01-15) o DD/MM/YYYY."],
     ["fecha_venta", "No", "Si está vendido. Mismo formato que fecha_compra."],
-    ["precio_venta", "Si vendido", "Número. Obligatorio si hay fecha_venta."],
+    ["precio_venta", "Si vendido", "Número en ARS. Obligatorio si hay fecha_venta."],
+    ["cotizacion_venta", "No", "ARS por USD del día de venta. Si vacío y hay fecha_venta, se busca automáticamente."],
     ["metodo_pago", "No", `Si hay fecha_venta: ${METODO_PAGO_IDS.join(" | ")}. Default: efectivo.`],
     ["comprador_nombre", "No", "Texto. Solo se guarda si está vendido."],
     ["comprador_telefono", "No", "Texto. Solo se guarda si está vendido."],
@@ -246,6 +263,20 @@ export async function analyzeRows(rawRows) {
   // Separar filas con SKU manual y sin SKU (las sin SKU se auto-generan)
   const withSku = valid.filter((r) => r.sku);
   const withoutSku = valid.filter((r) => !r.sku);
+
+  // Auto-fetch de cotizaciones faltantes (solo para filas válidas).
+  // Hacemos las queries en paralelo, ignoramos los que fallan.
+  const fetchTasks = [];
+  valid.forEach((row) => {
+    const n = row.normalized;
+    if (n.fecha_compra && !n.cotizacion_compra) {
+      fetchTasks.push(getDolarForDate(n.fecha_compra, "blue").then((r) => { n.cotizacion_compra = r.venta; }).catch(() => {}));
+    }
+    if (n.fecha_venta && !n.cotizacion_venta) {
+      fetchTasks.push(getDolarForDate(n.fecha_venta, "blue").then((r) => { n.cotizacion_venta = r.venta; }).catch(() => {}));
+    }
+  });
+  if (fetchTasks.length > 0) await Promise.all(fetchTasks);
 
   // Auto-generar SKUs para las sin SKU
   if (withoutSku.length > 0) {
