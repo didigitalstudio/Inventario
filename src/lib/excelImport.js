@@ -257,6 +257,44 @@ export async function analyzeRows(rawRows) {
   };
 }
 
+// Para filas duplicadas que el usuario quiere importar igual,
+// genera un SKU disponible auto-numerado: ANT-001 -> ANT-001-2, -3, etc.
+// Hace una sola query contra la DB para todos los prefijos.
+export async function resolveSkuConflicts(dupRows) {
+  if (!dupRows.length) return [];
+  const baseSkus = [...new Set(dupRows.map((r) => r.sku))];
+  // OR pattern para una sola query
+  const orClauses = baseSkus.map((s) => {
+    const safe = s.replace(/,/g, ""); // PostgREST usa coma como separador en .or()
+    return `sku.ilike.${safe}%`;
+  }).join(",");
+
+  const { data, error } = await supabase
+    .from("productos")
+    .select("sku")
+    .or(orClauses)
+    .is("deleted_at", null);
+  if (error) throw new Error("Error consultando SKUs existentes: " + error.message);
+  const existing = new Set((data || []).map((r) => r.sku));
+
+  const localUsed = new Set();
+  return dupRows.map((row) => {
+    let n = 2;
+    let candidate;
+    do {
+      candidate = `${row.sku}-${n}`;
+      n++;
+    } while (existing.has(candidate) || localUsed.has(candidate));
+    localUsed.add(candidate);
+    return {
+      ...row,
+      originalSku: row.sku,
+      sku: candidate,
+      normalized: { ...row.normalized, sku: candidate },
+    };
+  });
+}
+
 // Inserta en lotes de 100, devuelve {inserted, failed}
 export async function insertRowsInBatches(rows, onProgress) {
   const BATCH = 100;
@@ -284,24 +322,38 @@ export async function insertRowsInBatches(rows, onProgress) {
 export function downloadReport(report) {
   const wb = XLSX.utils.book_new();
 
+  const insertedNew = report.inserted.filter((r) => !r.originalSku).length;
+  const insertedAsDup = report.inserted.filter((r) => r.originalSku).length;
+
   const summary = [
     ["Reporte de importación"],
     ["Fecha", new Date().toLocaleString("es-AR")],
     [],
     ["Filas procesadas", report.totalProcessed],
-    ["Importadas", report.inserted.length],
-    ["Salteadas (duplicados)", report.duplicates.length],
+    ["Importadas (nuevas)", insertedNew],
+    ["Importadas como duplicado (SKU auto-numerado)", insertedAsDup],
+    ["Salteadas (duplicados sin importar)", report.duplicates.length],
     ["Con error", report.invalid.length + report.failed.length],
   ];
   const wsSum = XLSX.utils.aoa_to_sheet(summary);
   wsSum["!cols"] = [{ wch: 28 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, wsSum, "Resumen");
 
-  if (report.inserted.length) {
-    const data = [["Fila", "SKU", "Nombre"], ...report.inserted.map((r) => [r.rowNumber, r.sku, r.nombre])];
+  // Separar inserted: las que tenían originalSku son duplicadas importadas con SKU nuevo
+  const insertedNew = report.inserted.filter((r) => !r.originalSku);
+  const insertedAsDup = report.inserted.filter((r) => r.originalSku);
+
+  if (insertedNew.length) {
+    const data = [["Fila", "SKU", "Nombre"], ...insertedNew.map((r) => [r.rowNumber, r.sku, r.nombre])];
     const ws = XLSX.utils.aoa_to_sheet(data);
     ws["!cols"] = [{ wch: 8 }, { wch: 18 }, { wch: 60 }];
     XLSX.utils.book_append_sheet(wb, ws, "Importadas");
+  }
+  if (insertedAsDup.length) {
+    const data = [["Fila", "SKU original", "SKU nuevo", "Nombre"], ...insertedAsDup.map((r) => [r.rowNumber, r.originalSku, r.sku, r.nombre])];
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    ws["!cols"] = [{ wch: 8 }, { wch: 18 }, { wch: 18 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Importadas como duplicado");
   }
   if (report.duplicates.length) {
     const data = [["Fila", "SKU", "Nombre", "Motivo"], ...report.duplicates.map((r) => [r.rowNumber, r.sku, r.nombre, r.motivo])];

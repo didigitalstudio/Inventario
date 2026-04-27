@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "./supabaseClient";
-import { downloadTemplate, parseExcelFile, analyzeRows, insertRowsInBatches, downloadReport } from "./lib/excelImport";
+import { downloadTemplate, parseExcelFile, analyzeRows, resolveSkuConflicts, insertRowsInBatches, downloadReport } from "./lib/excelImport";
 
 const CATEGORIAS = [
   { id: "relojes", label: "Relojes", icon: "⌚" },
@@ -963,8 +963,9 @@ function ImportModal({ open, onClose, onComplete, showError }) {
   const [analysis, setAnalysis] = useState(null);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [report, setReport] = useState(null);
+  const [dupesToImport, setDupesToImport] = useState(new Set()); // indices de analysis.duplicates que se importan igual
 
-  const reset = () => { setStage("idle"); setAnalysis(null); setProgress({ done: 0, total: 0 }); setReport(null); };
+  const reset = () => { setStage("idle"); setAnalysis(null); setProgress({ done: 0, total: 0 }); setReport(null); setDupesToImport(new Set()); };
 
   useEffect(() => { if (!open) reset(); }, [open]);
 
@@ -991,13 +992,19 @@ function ImportModal({ open, onClose, onComplete, showError }) {
 
   const handleConfirmImport = async () => {
     setStage("importing");
-    setProgress({ done: 0, total: analysis.toInsert.length });
     try {
-      const { inserted, failed } = await insertRowsInBatches(analysis.toInsert, (done, total) => setProgress({ done, total }));
+      // Separar duplicados que el user quiere importar de los que va a saltear
+      const dupesChosen = analysis.duplicates.filter((_, idx) => dupesToImport.has(idx));
+      const dupesSkipped = analysis.duplicates.filter((_, idx) => !dupesToImport.has(idx));
+      // Resolver SKUs auto-numerados para los elegidos
+      const resolved = dupesChosen.length > 0 ? await resolveSkuConflicts(dupesChosen) : [];
+      const allToInsert = [...analysis.toInsert, ...resolved];
+      setProgress({ done: 0, total: allToInsert.length });
+      const { inserted, failed } = await insertRowsInBatches(allToInsert, (done, total) => setProgress({ done, total }));
       const finalReport = {
         totalProcessed: analysis.total,
         inserted, failed,
-        duplicates: analysis.duplicates,
+        duplicates: dupesSkipped,
         invalid: analysis.invalid,
       };
       setReport(finalReport);
@@ -1007,6 +1014,18 @@ function ImportModal({ open, onClose, onComplete, showError }) {
       showError("Error en la importación: " + (err.message || "desconocido"));
       setStage("preview");
     }
+  };
+
+  const toggleDup = (idx) => {
+    setDupesToImport((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      return next;
+    });
+  };
+  const toggleAllDups = () => {
+    if (dupesToImport.size === analysis.duplicates.length) setDupesToImport(new Set());
+    else setDupesToImport(new Set(analysis.duplicates.map((_, i) => i)));
   };
 
   if (!open) return null;
@@ -1038,45 +1057,76 @@ function ImportModal({ open, onClose, onComplete, showError }) {
           </div>
         )}
 
-        {stage === "preview" && analysis && (
-          <>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
-              <div style={{ background: "#EAF3DE", padding: "12px 14px", borderRadius: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 14, color: "#3B6D11", fontWeight: 600 }}>✅ Listas para importar</span>
-                <span style={{ fontSize: 18, fontWeight: 700, color: "#3B6D11" }}>{analysis.toInsert.length}</span>
-              </div>
-              {analysis.duplicates.length > 0 && (
-                <div style={{ background: "#FFF7E6", padding: "12px 14px", borderRadius: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 14, color: "#854F0B", fontWeight: 600 }}>⚠️ Salteadas (duplicadas)</span>
-                  <span style={{ fontSize: 18, fontWeight: 700, color: "#854F0B" }}>{analysis.duplicates.length}</span>
+        {stage === "preview" && analysis && (() => {
+          const dupCount = dupesToImport.size;
+          const totalToImport = analysis.toInsert.length + dupCount;
+          return (
+            <>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                <div style={{ background: "#EAF3DE", padding: "12px 14px", borderRadius: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 14, color: "#3B6D11", fontWeight: 600 }}>✅ Listas para importar</span>
+                  <span style={{ fontSize: 18, fontWeight: 700, color: "#3B6D11" }}>{analysis.toInsert.length}</span>
                 </div>
-              )}
-              {analysis.invalid.length > 0 && (
-                <div style={{ background: "#FCEBEB", padding: "12px 14px", borderRadius: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 14, color: "#A32D2D", fontWeight: 600 }}>❌ Con errores (no se importan)</span>
-                  <span style={{ fontSize: 18, fontWeight: 700, color: "#A32D2D" }}>{analysis.invalid.length}</span>
-                </div>
-              )}
-            </div>
-            {analysis.invalid.length > 0 && (
-              <div style={{ background: "#FCEBEB", padding: "10px 14px", borderRadius: 10, marginBottom: 14, maxHeight: 140, overflowY: "auto" }}>
-                <p style={{ fontSize: 12, fontWeight: 700, color: "#A32D2D", margin: "0 0 6px" }}>Primeros errores:</p>
-                {analysis.invalid.slice(0, 5).map((r, i) => (
-                  <div key={i} style={{ fontSize: 12, color: "#A32D2D", marginBottom: 4, lineHeight: 1.4 }}>
-                    Fila {r.rowNumber}{r.sku ? ` (${r.sku})` : ""}: {r.errors.join("; ")}
+                {analysis.invalid.length > 0 && (
+                  <div style={{ background: "#FCEBEB", padding: "12px 14px", borderRadius: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 14, color: "#A32D2D", fontWeight: 600 }}>❌ Con errores (no se importan)</span>
+                    <span style={{ fontSize: 18, fontWeight: 700, color: "#A32D2D" }}>{analysis.invalid.length}</span>
                   </div>
-                ))}
-                {analysis.invalid.length > 5 && <p style={{ fontSize: 12, color: "#A32D2D", margin: "4px 0 0", fontStyle: "italic" }}>...y {analysis.invalid.length - 5} más. Vas a poder descargar el reporte completo después.</p>}
+                )}
               </div>
-            )}
-            <button disabled={analysis.toInsert.length === 0} onClick={handleConfirmImport} style={{ width: "100%", background: analysis.toInsert.length === 0 ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "16px 0", fontSize: 17, fontWeight: 700, cursor: analysis.toInsert.length === 0 ? "default" : "pointer", minHeight: 56, fontFamily: "inherit" }}>
-              {analysis.toInsert.length === 0 ? "Nada para importar" : `Importar ${analysis.toInsert.length} producto${analysis.toInsert.length === 1 ? "" : "s"}`}
-            </button>
-            <button onClick={onClose} style={{ width: "100%", background: "#F7F6F3", color: "#5F5E5A", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 15, fontWeight: 600, cursor: "pointer", marginTop: 10, minHeight: 48, fontFamily: "inherit" }}>
-              Cancelar
-            </button>
-          </>
-        )}
+
+              {analysis.duplicates.length > 0 && (
+                <div style={{ background: "#FFF7E6", border: "1px solid #F5E3B8", borderRadius: 12, padding: 12, marginBottom: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#854F0B" }}>⚠️ Duplicados ({analysis.duplicates.length})</div>
+                      <div style={{ fontSize: 12, color: "#854F0B", marginTop: 2 }}>
+                        Marcá los que querés importar igual (se les asigna SKU nuevo, ej. {analysis.duplicates[0]?.sku}-2)
+                      </div>
+                    </div>
+                    <button onClick={toggleAllDups} style={{ background: "#fff", border: "1px solid #C5C3B9", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 600, color: "#5F5E5A", cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
+                      {dupesToImport.size === analysis.duplicates.length ? "Desmarcar todos" : "Marcar todos"}
+                    </button>
+                  </div>
+                  <div style={{ maxHeight: 200, overflowY: "auto", background: "#fff", borderRadius: 8 }}>
+                    {analysis.duplicates.map((d, idx) => (
+                      <label key={idx} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderBottom: idx < analysis.duplicates.length - 1 ? "1px solid #F1EFE8" : "none", cursor: "pointer" }}>
+                        <input type="checkbox" checked={dupesToImport.has(idx)} onChange={() => toggleDup(idx)} style={{ marginTop: 3, width: 18, height: 18, cursor: "pointer", accentColor: "#1D9E75" }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#2C2C2A", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            <span style={{ color: "#854F0B" }}>{d.sku}</span> · {d.nombre || "(sin nombre)"}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#5F5E5A", marginTop: 2 }}>{d.motivo}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {analysis.invalid.length > 0 && (
+                <div style={{ background: "#FCEBEB", padding: "10px 14px", borderRadius: 10, marginBottom: 14, maxHeight: 140, overflowY: "auto" }}>
+                  <p style={{ fontSize: 12, fontWeight: 700, color: "#A32D2D", margin: "0 0 6px" }}>Primeros errores:</p>
+                  {analysis.invalid.slice(0, 5).map((r, i) => (
+                    <div key={i} style={{ fontSize: 12, color: "#A32D2D", marginBottom: 4, lineHeight: 1.4 }}>
+                      Fila {r.rowNumber}{r.sku ? ` (${r.sku})` : ""}: {r.errors.join("; ")}
+                    </div>
+                  ))}
+                  {analysis.invalid.length > 5 && <p style={{ fontSize: 12, color: "#A32D2D", margin: "4px 0 0", fontStyle: "italic" }}>...y {analysis.invalid.length - 5} más en el reporte.</p>}
+                </div>
+              )}
+
+              <button disabled={totalToImport === 0} onClick={handleConfirmImport} style={{ width: "100%", background: totalToImport === 0 ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "16px 0", fontSize: 17, fontWeight: 700, cursor: totalToImport === 0 ? "default" : "pointer", minHeight: 56, fontFamily: "inherit" }}>
+                {totalToImport === 0
+                  ? "Nada para importar"
+                  : `Importar ${totalToImport} producto${totalToImport === 1 ? "" : "s"}${dupCount > 0 ? ` (${analysis.toInsert.length} nuevos + ${dupCount} duplicados)` : ""}`}
+              </button>
+              <button onClick={onClose} style={{ width: "100%", background: "#F7F6F3", color: "#5F5E5A", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 15, fontWeight: 600, cursor: "pointer", marginTop: 10, minHeight: 48, fontFamily: "inherit" }}>
+                Cancelar
+              </button>
+            </>
+          );
+        })()}
 
         {stage === "importing" && (
           <div style={{ textAlign: "center", padding: "20px 0" }}>
@@ -1089,8 +1139,10 @@ function ImportModal({ open, onClose, onComplete, showError }) {
           </div>
         )}
 
-        {stage === "done" && report && (
-          <>
+        {stage === "done" && report && (() => {
+          const insertedNew = report.inserted.filter((r) => !r.originalSku).length;
+          const insertedAsDup = report.inserted.filter((r) => r.originalSku).length;
+          return (<>
             <div style={{ background: "#EAF3DE", padding: "16px", borderRadius: 12, marginBottom: 14, textAlign: "center" }}>
               <div style={{ fontSize: 36, marginBottom: 6 }}>🎉</div>
               <p style={{ fontSize: 17, fontWeight: 700, color: "#3B6D11", margin: 0 }}>{report.inserted.length} producto{report.inserted.length === 1 ? "" : "s"} importado{report.inserted.length === 1 ? "" : "s"}</p>
@@ -1101,11 +1153,17 @@ function ImportModal({ open, onClose, onComplete, showError }) {
                 <span style={{ fontSize: 14, fontWeight: 700 }}>{report.totalProcessed}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #F1EFE8" }}>
-                <span style={{ fontSize: 14, color: "#3B6D11" }}>✅ Importadas</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#3B6D11" }}>{report.inserted.length}</span>
+                <span style={{ fontSize: 14, color: "#3B6D11" }}>✅ Importadas (nuevas)</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#3B6D11" }}>{insertedNew}</span>
               </div>
+              {insertedAsDup > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #F1EFE8" }}>
+                  <span style={{ fontSize: 14, color: "#3B6D11" }}>📑 Importadas como duplicado</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "#3B6D11" }}>{insertedAsDup}</span>
+                </div>
+              )}
               <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #F1EFE8" }}>
-                <span style={{ fontSize: 14, color: "#854F0B" }}>⚠️ Salteadas (duplicadas)</span>
+                <span style={{ fontSize: 14, color: "#854F0B" }}>⏭️ Duplicados salteados</span>
                 <span style={{ fontSize: 14, fontWeight: 700, color: "#854F0B" }}>{report.duplicates.length}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0" }}>
@@ -1119,8 +1177,8 @@ function ImportModal({ open, onClose, onComplete, showError }) {
             <button onClick={onClose} style={{ width: "100%", background: "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 15, fontWeight: 700, cursor: "pointer", marginTop: 10, minHeight: 52, fontFamily: "inherit" }}>
               Cerrar
             </button>
-          </>
-        )}
+          </>);
+        })()}
       </div>
     </div>
   );
