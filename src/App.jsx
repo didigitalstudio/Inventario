@@ -1,30 +1,23 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from "react";
 import { supabase } from "./supabaseClient";
 import { downloadTemplate, parseExcelFile, analyzeRows, resolveSkuConflicts, insertRowsInBatches, downloadReport, exportProductsToExcel, getNextAutoSkus } from "./lib/excelImport";
 import { getCurrentDolar, getDolarForDate, formatUSD, arsToUsd } from "./lib/dolarApi";
 
-const CATEGORIAS = [
-  { id: "relojes", label: "Relojes", icon: "⌚" },
-  { id: "anillos", label: "Anillos", icon: "💍" },
-  { id: "pulseras", label: "Pulseras", icon: "📿" },
-  { id: "collares", label: "Collares", icon: "🪬" },
-  { id: "colgantes", label: "Colgantes", icon: "✨" },
-  { id: "broches", label: "Broches", icon: "🔮" },
-  { id: "aros", label: "Aros", icon: "🌀" },
-  { id: "cadenas", label: "Cadenas", icon: "⛓️" },
-  { id: "muebles", label: "Muebles", icon: "🪑" },
-  { id: "mesas", label: "Mesas", icon: "🪵" },
-  { id: "espejos", label: "Espejos", icon: "🪞" },
-  { id: "lamparas", label: "Lámparas", icon: "🪔" },
-  { id: "alfombras", label: "Alfombras", icon: "🟫" },
-  { id: "cuadros", label: "Cuadros", icon: "🖼️" },
-  { id: "vajilla", label: "Vajilla", icon: "🏺" },
-  { id: "relojes_pared", label: "Relojes de pared", icon: "🕰️" },
-  { id: "esculturas", label: "Esculturas", icon: "🗿" },
-  { id: "monedas", label: "Monedas", icon: "🪙" },
-  { id: "libros", label: "Libros antiguos", icon: "📚" },
+// Default mínimo para usuarios nuevos sin categorías custom seteadas.
+const CATEGORIAS_DEFAULT = [
   { id: "otros", label: "Otros", icon: "📦" },
 ];
+
+// Helper: lee las categorías del user_metadata o cae al default.
+function getUserCategorias(session) {
+  const raw = session?.user?.user_metadata?.categorias;
+  if (Array.isArray(raw) && raw.length > 0) return raw;
+  return CATEGORIAS_DEFAULT;
+}
+
+// Context para que los componentes accedan a las categorías del user actual.
+const CategoriasContext = createContext(CATEGORIAS_DEFAULT);
+function useCategorias() { return useContext(CategoriasContext); }
 
 const METODOS_PAGO = [
   { id: "efectivo", label: "Efectivo", icon: "💵" },
@@ -52,8 +45,9 @@ function monthLabelFull(key) {
   const [yyyy, mm] = key.split("-");
   return `${names[parseInt(mm) - 1]} ${yyyy}`;
 }
-function getCat(id) {
-  return CATEGORIAS.find((c) => c.id === id) || { label: "Otros", icon: "📦" };
+function getCat(id, categorias) {
+  const list = categorias || CATEGORIAS_DEFAULT;
+  return list.find((c) => c.id === id) || { id: id || "otros", label: "Otros", icon: "📦" };
 }
 function getMetodo(id) {
   return METODOS_PAGO.find((m) => m.id === id);
@@ -283,11 +277,12 @@ function Field({ label, children }) {
 }
 
 function CategoryPicker({ value, onChange }) {
+  const categorias = useCategorias();
   return (
     <div style={{ marginBottom: 16 }}>
       <label style={{ display: "block", fontSize: 15, fontWeight: 600, color: "#3F3E3A", marginBottom: 10 }}>Categoría</label>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-        {CATEGORIAS.map((c) => (
+        {categorias.map((c) => (
           <button key={c.id} type="button" onClick={() => onChange(c.id)} style={{
             background: value === c.id ? "#E1F5EE" : "#F7F6F3",
             border: value === c.id ? "2px solid #1D9E75" : "2px solid transparent",
@@ -422,6 +417,7 @@ function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError 
 
 // SellForm: solo datos de venta. Se usa al "Marcar como vendido" y al "Editar venta".
 function SellForm({ item, onSave, saving, onError, isEdit }) {
+  const categorias = useCategorias();
   const today = new Date().toISOString().slice(0, 10);
   const [f, setF] = useState({
     fecha_venta: item?.fecha_venta || today,
@@ -474,7 +470,7 @@ function SellForm({ item, onSave, saving, onError, isEdit }) {
     <div style={{ animation: "fadeIn 0.2s ease", paddingBottom: 30 }}>
       <div style={{ background: "#F7F6F3", borderRadius: 12, padding: "10px 14px", marginBottom: 16, display: "flex", gap: 10, alignItems: "center" }}>
         <div style={{ width: 44, height: 44, minWidth: 44, borderRadius: 8, overflow: "hidden", background: firstPhoto(item) ? `url(${firstPhoto(item)}) center/cover no-repeat` : "#F1EFE8", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>
-          {!firstPhoto(item) && getCat(item.categoria).icon}
+          {!firstPhoto(item) && getCat(item.categoria, categorias).icon}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <p style={{ fontSize: 14, fontWeight: 600, margin: 0, color: "#2C2C2A", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.nombre}</p>
@@ -525,8 +521,9 @@ function SellForm({ item, onSave, saving, onError, isEdit }) {
 }
 
 function ProductCard({ item, onClick }) {
+  const categorias = useCategorias();
   const profit = item.precio_venta ? Number(item.precio_venta) - Number(item.precio_compra) : null;
-  const cat = getCat(item.categoria);
+  const cat = getCat(item.categoria, categorias);
   const foto = firstPhoto(item);
   const stale = !item.fecha_venta ? staleDays(item) : 0;
   const arsShown = item.fecha_venta ? item.precio_venta : item.precio_compra;
@@ -648,11 +645,12 @@ function SalesStats({ items, porMes, meses }) {
 }
 
 function CategoryFilter({ value, onChange, items }) {
+  const categorias = useCategorias();
   const usedCats = useMemo(() => [...new Set(items.map((i) => i.categoria).filter(Boolean))], [items]);
   return (
     <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 10, marginBottom: 10, scrollbarWidth: "none" }}>
       <button onClick={() => onChange("todos")} style={{ flexShrink: 0, background: value === "todos" ? "#1D9E75" : "#F7F6F3", color: value === "todos" ? "#fff" : "#3F3E3A", border: "none", borderRadius: 24, padding: "10px 18px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", minHeight: 40 }}>Todas</button>
-      {CATEGORIAS.filter((c) => usedCats.includes(c.id)).map((c) => (
+      {categorias.filter((c) => usedCats.includes(c.id)).map((c) => (
         <button key={c.id} onClick={() => onChange(c.id)} style={{ flexShrink: 0, background: value === c.id ? "#1D9E75" : "#F7F6F3", color: value === c.id ? "#fff" : "#3F3E3A", border: "none", borderRadius: 24, padding: "10px 16px", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", minHeight: 40 }}>
           {c.icon} {c.label}
         </button>
@@ -697,6 +695,7 @@ function StockAdvancedFilters({ filters, setFilters }) {
 }
 
 function VendidosFilters({ filters, setFilters, items }) {
+  const categorias = useCategorias();
   const [open, setOpen] = useState(false);
   const active = filters.ventaDesde || filters.ventaHasta || filters.metodo !== "todos" || filters.categoria !== "todos";
   const usedCats = useMemo(() => [...new Set(items.map((i) => i.categoria).filter(Boolean))], [items]);
@@ -731,7 +730,7 @@ function VendidosFilters({ filters, setFilters, items }) {
             <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#5F5E5A", marginBottom: 6 }}>Categoría</label>
             <div style={{ display: "flex", gap: 6, marginBottom: active ? 10 : 0, flexWrap: "wrap" }}>
               <button onClick={() => setFilters({ ...filters, categoria: "todos" })} style={{ background: filters.categoria === "todos" ? "#1D9E75" : "#fff", color: filters.categoria === "todos" ? "#fff" : "#5F5E5A", border: "1px solid #D3D1C7", borderRadius: 20, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Todas</button>
-              {CATEGORIAS.filter((c) => usedCats.includes(c.id)).map((c) => (
+              {categorias.filter((c) => usedCats.includes(c.id)).map((c) => (
                 <button key={c.id} onClick={() => setFilters({ ...filters, categoria: c.id })} style={{ background: filters.categoria === c.id ? "#1D9E75" : "#fff", color: filters.categoria === c.id ? "#fff" : "#5F5E5A", border: "1px solid #D3D1C7", borderRadius: 20, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                   {c.icon} {c.label}
                 </button>
@@ -769,9 +768,10 @@ function PhotoGallery({ photos, cat }) {
 }
 
 function DetailView({ item, onEditProduct, onMarkSold, onEditSale, onUnsell, onMarkCobrado, onUnmarkCobrado }) {
+  const categorias = useCategorias();
   const isSold = !!item.fecha_venta;
   const profit = isSold ? Number(item.precio_venta) - Number(item.precio_compra) : null;
-  const cat = getCat(item.categoria);
+  const cat = getCat(item.categoria, categorias);
   const photos = item.fotos_urls || [];
 
   return (
@@ -931,6 +931,7 @@ function DetailView({ item, onEditProduct, onMarkSold, onEditSale, onUnsell, onM
 }
 
 function ChequesView({ items, onOpen }) {
+  const categorias = useCategorias();
   const [subTab, setSubTab] = useState("pendientes");
   const today = new Date().toISOString().slice(0, 10);
 
@@ -986,7 +987,7 @@ function ChequesView({ items, onOpen }) {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid #F1EFE8", paddingTop: 8, gap: 8 }}>
                 <div style={{ fontSize: 13, color: "#3F3E3A", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {getCat(item.categoria).icon} {item.nombre}
+                  {getCat(item.categoria, categorias).icon} {item.nombre}
                 </div>
                 <div style={{ fontSize: 13, color: vencido ? "#A32D2D" : "#5F5E5A", fontWeight: 600, whiteSpace: "nowrap" }}>
                   📅 {subTab === "cobrados" && item.cheque_cobrado_at ? formatDate(item.cheque_cobrado_at.slice(0, 10)) : (item.cheque_fecha_cobro ? formatDate(item.cheque_fecha_cobro) : "Sin fecha")}
@@ -1003,6 +1004,7 @@ function ChequesView({ items, onOpen }) {
 }
 
 function AnalisisView({ items }) {
+  const categorias = useCategorias();
   const stats = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     const stock = items.filter((i) => !i.fecha_venta);
@@ -1116,7 +1118,7 @@ function AnalisisView({ items }) {
           <h2 style={{ fontSize: 15, fontWeight: 700, color: "#3F3E3A", margin: "4px 0 10px" }}>Top categorías (por ganancia)</h2>
           <div>
             {stats.topCats.map(([catId, data]) => {
-              const cat = getCat(catId);
+              const cat = getCat(catId, categorias);
               return (
                 <div key={catId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", background: "#F7F6F3", borderRadius: 12, marginBottom: 6 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1137,7 +1139,8 @@ function AnalisisView({ items }) {
   );
 }
 
-function ImportModal({ open, onClose, onComplete, showError }) {
+function ImportModal({ open, onClose, onComplete, showError, categorias }) {
+  const validCategoriaIds = (categorias || CATEGORIAS_DEFAULT).map((c) => c.id);
   const fileRef = useRef();
   const [stage, setStage] = useState("idle"); // idle | analyzing | preview | importing | done
   const [analysis, setAnalysis] = useState(null);
@@ -1161,7 +1164,7 @@ function ImportModal({ open, onClose, onComplete, showError }) {
         setStage("idle");
         return;
       }
-      const result = await analyzeRows(rows);
+      const result = await analyzeRows(rows, validCategoriaIds);
       setAnalysis(result);
       setStage("preview");
     } catch (err) {
@@ -1364,6 +1367,85 @@ function ImportModal({ open, onClose, onComplete, showError }) {
   );
 }
 
+function CategoriasManager({ open, onClose, categorias, onSave, items }) {
+  const [draft, setDraft] = useState(categorias);
+  const [newLabel, setNewLabel] = useState("");
+  const [newIcon, setNewIcon] = useState("📦");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { if (open) { setDraft(categorias); setNewLabel(""); setNewIcon("📦"); } }, [open, categorias]);
+
+  if (!open) return null;
+
+  const slugify = (s) => s.toString().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 32) || "cat";
+
+  const usageCount = (id) => items.filter((i) => i.categoria === id).length;
+
+  const addCat = () => {
+    const label = newLabel.trim();
+    if (!label) return;
+    let id = slugify(label);
+    let suffix = 2;
+    while (draft.some((c) => c.id === id)) { id = `${slugify(label)}_${suffix++}`; }
+    setDraft([...draft, { id, label, icon: newIcon || "📦" }]);
+    setNewLabel(""); setNewIcon("📦");
+  };
+
+  const updateCat = (idx, patch) => {
+    setDraft(draft.map((c, i) => i === idx ? { ...c, ...patch } : c));
+  };
+
+  const removeCat = (idx) => {
+    const c = draft[idx];
+    const used = usageCount(c.id);
+    if (used > 0) {
+      if (!confirm(`"${c.label}" está usada en ${used} producto${used === 1 ? "" : "s"}. Si la borrás, esos productos quedan en categoría "Otros". ¿Continuar?`)) return;
+    }
+    setDraft(draft.filter((_, i) => i !== idx));
+  };
+
+  const handleSave = async () => {
+    if (draft.length === 0) { alert("Tenés que dejar al menos una categoría"); return; }
+    setSaving(true);
+    const ok = await onSave(draft);
+    setSaving(false);
+    if (ok) onClose();
+  };
+
+  return (
+    <div onClick={(e) => { if (e.target === e.currentTarget && !saving) onClose(); }} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: 16, animation: "fadeIn 0.15s ease" }}>
+      <div style={{ background: "#fff", borderRadius: 18, padding: 22, maxWidth: 480, width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ fontSize: 19, fontWeight: 700, margin: 0, color: "#2C2C2A" }}>🏷️ Categorías</h3>
+          <button onClick={onClose} aria-label="Cerrar" style={{ background: "none", border: "none", fontSize: 22, color: "#5F5E5A", cursor: "pointer", padding: 4 }}>×</button>
+        </div>
+        <p style={{ fontSize: 13, color: "#5F5E5A", margin: "0 0 14px", lineHeight: 1.4 }}>Definí las categorías de tus productos. El icono puede ser cualquier emoji.</p>
+        <div style={{ flex: 1, overflowY: "auto", marginBottom: 14, border: "1px solid #E5E3DB", borderRadius: 12 }}>
+          {draft.map((c, idx) => {
+            const used = usageCount(c.id);
+            return (
+              <div key={c.id} style={{ display: "flex", gap: 8, padding: "10px 12px", borderBottom: idx < draft.length - 1 ? "1px solid #F1EFE8" : "none", alignItems: "center" }}>
+                <input value={c.icon} onChange={(e) => updateCat(idx, { icon: e.target.value })} maxLength={4} style={{ width: 44, padding: "8px", fontSize: 22, textAlign: "center", border: "1px solid #C5C3B9", borderRadius: 8, fontFamily: "inherit" }} />
+                <input value={c.label} onChange={(e) => updateCat(idx, { label: e.target.value })} style={{ flex: 1, padding: "10px 12px", fontSize: 15, border: "1px solid #C5C3B9", borderRadius: 8, fontFamily: "inherit", color: "#2C2C2A" }} />
+                <span style={{ fontSize: 11, color: "#5F5E5A", whiteSpace: "nowrap", minWidth: 50, textAlign: "right" }}>{used} prod.</span>
+                <button onClick={() => removeCat(idx)} aria-label="Borrar" style={{ background: "#FCEBEB", color: "#A32D2D", border: "none", borderRadius: 8, width: 36, height: 36, fontSize: 16, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>🗑</button>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <input value={newIcon} onChange={(e) => setNewIcon(e.target.value)} maxLength={4} placeholder="📦" style={{ width: 44, padding: "8px", fontSize: 22, textAlign: "center", border: "1px solid #C5C3B9", borderRadius: 8, fontFamily: "inherit" }} />
+          <input value={newLabel} onChange={(e) => setNewLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCat(); } }} placeholder="Nombre de categoría nueva" style={{ flex: 1, padding: "10px 12px", fontSize: 15, border: "1px solid #C5C3B9", borderRadius: 8, fontFamily: "inherit" }} />
+          <button onClick={addCat} disabled={!newLabel.trim()} style={{ background: newLabel.trim() ? "#1D9E75" : "#9FE1CB", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", fontSize: 15, fontWeight: 700, cursor: newLabel.trim() ? "pointer" : "default", fontFamily: "inherit", minHeight: 40 }}>+ Agregar</button>
+        </div>
+        <button disabled={saving} onClick={handleSave} style={{ width: "100%", background: saving ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 14, padding: "14px 0", fontSize: 16, fontWeight: 700, cursor: saving ? "default" : "pointer", minHeight: 52, fontFamily: "inherit" }}>
+          {saving ? "Guardando..." : "Guardar cambios"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function BottomNav({ tab, setTab }) {
   return (
     <div style={{ position: "sticky", bottom: 0, background: "#fff", borderTop: "1px solid #E5E3DB", display: "flex", zIndex: 20, marginLeft: -16, marginRight: -16, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
@@ -1444,7 +1526,10 @@ function AuthScreen({ initialMode = "signin", onBack }) {
       } else {
         const { error } = await supabase.auth.signUp({
           email, password,
-          options: { data: { inventory_name: inventoryName.trim() || "Mi inventario" } },
+          options: { data: {
+            inventory_name: inventoryName.trim() || "Mi inventario",
+            categorias: CATEGORIAS_DEFAULT,
+          } },
         });
         if (error) throw error;
         setMsg({ type: "success", text: "Cuenta creada. Si te pide confirmar el email te llega un mail; si no, ya entrás directo." });
@@ -1518,6 +1603,10 @@ function OnboardingModal({ open, onClose, inventoryName }) {
 
 function InventoryApp({ session }) {
   const inventoryName = session?.user?.user_metadata?.inventory_name || "Mi inventario";
+  const [categorias, setCategorias] = useState(() => getUserCategorias(session));
+  const [categoriasOpen, setCategoriasOpen] = useState(false);
+  // refresh local categorias si cambian en metadata via updateUser
+  const refreshCategorias = () => setCategorias(getUserCategorias(session));
   const [items, setItems] = useState([]);
   const [tab, setTab] = useState("stock");
   const [view, setView] = useState("list"); // list | detail | form | sell
@@ -1774,6 +1863,7 @@ function InventoryApp({ session }) {
     : (tab === "stock" ? inventoryName : tab === "vendidos" ? "Vendidos" : tab === "cheques" ? "Cheques" : "Análisis");
 
   return (
+    <CategoriasContext.Provider value={categorias}>
     <div style={{ fontFamily: "'DM Sans','Segoe UI',-apple-system,sans-serif", maxWidth: 480, margin: "0 auto", padding: "0 16px", color: "#2C2C2A", minHeight: "100dvh", display: "flex", flexDirection: "column" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
@@ -1808,7 +1898,9 @@ function InventoryApp({ session }) {
                     <div onClick={() => setMenuOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 30 }} />
                     <div style={{ position: "absolute", right: 0, top: 48, background: "#fff", borderRadius: 12, boxShadow: "0 4px 16px rgba(0,0,0,0.12)", zIndex: 31, minWidth: 180, padding: 6 }}>
                       <div style={{ padding: "10px 14px", fontSize: 12, color: "#5F5E5A", borderBottom: "1px solid #F1EFE8", marginBottom: 4, wordBreak: "break-all" }}>{session?.user?.email}</div>
-                      <button onClick={() => { setMenuOpen(false); downloadTemplate(); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>📄 Descargar plantilla Excel</button>
+                      <button onClick={() => { setMenuOpen(false); setCategoriasOpen(true); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>🏷️ Gestionar categorías</button>
+                      <div style={{ height: 1, background: "#F1EFE8", margin: "4px 0" }} />
+                      <button onClick={() => { setMenuOpen(false); downloadTemplate(categorias.map((c) => c.id)); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>📄 Descargar plantilla Excel</button>
                       <button onClick={() => { setMenuOpen(false); setImportOpen(true); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>📥 Importar productos desde Excel</button>
                       <button onClick={() => { setMenuOpen(false); handleExport(); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>📤 Exportar productos a Excel</button>
                       <div style={{ height: 1, background: "#F1EFE8", margin: "4px 0" }} />
@@ -1894,9 +1986,17 @@ function InventoryApp({ session }) {
       {!showingSubView && <BottomNav tab={tab} setTab={(t) => { setTab(t); setView("list"); setSelected(null); setSearch(""); }} />}
       <Toast toast={toast} onClose={closeToast} />
       <Modal open={!!confirmDialog} {...(confirmDialog || {})} />
-      <ImportModal open={importOpen} onClose={() => setImportOpen(false)} onComplete={fetchItems} showError={showError} />
+      <ImportModal open={importOpen} onClose={() => setImportOpen(false)} onComplete={fetchItems} showError={showError} categorias={categorias} />
       <OnboardingModal open={showOnboarding} onClose={dismissOnboarding} inventoryName={inventoryName} />
+      <CategoriasManager open={categoriasOpen} onClose={() => setCategoriasOpen(false)} categorias={categorias} onSave={async (next) => {
+        const { error } = await supabase.auth.updateUser({ data: { categorias: next } });
+        if (error) { showError("Error guardando: " + error.message); return false; }
+        setCategorias(next);
+        showToast("Categorías actualizadas");
+        return true;
+      }} items={items} />
     </div>
+    </CategoriasContext.Provider>
   );
 }
 

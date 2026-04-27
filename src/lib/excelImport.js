@@ -2,13 +2,9 @@ import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
 import { getDolarForDate } from "./dolarApi";
 
-// IDs de categorias soportadas (deben coincidir con CATEGORIAS de App.jsx)
-export const CATEGORIA_IDS = [
-  "relojes", "anillos", "pulseras", "collares", "colgantes", "broches",
-  "aros", "cadenas", "muebles", "mesas", "espejos", "lamparas",
-  "alfombras", "cuadros", "vajilla", "relojes_pared", "esculturas",
-  "monedas", "libros", "otros",
-];
+// Las categorias dependen del usuario y se pasan como param a las funciones de import.
+// Default mínimo de fallback si no se pasan.
+const DEFAULT_CATEGORIA_IDS = ["otros"];
 export const METODO_PAGO_IDS = ["efectivo", "transferencia", "cheque"];
 
 // Headers en el orden que aparecen en la plantilla
@@ -89,7 +85,7 @@ export async function getNextAutoSkus(count, existingInBatch = []) {
 
 // ----- Validacion de fila -----
 
-function validateRow(raw, rowNumber) {
+function validateRow(raw, rowNumber, validCategoriaIds = DEFAULT_CATEGORIA_IDS) {
   const errors = [];
   const get = (k) => trimStr(raw[k]);
 
@@ -98,8 +94,8 @@ function validateRow(raw, rowNumber) {
   if (!nombre) errors.push("Falta nombre (obligatorio)");
 
   const categoria = get("categoria") || "otros";
-  if (!CATEGORIA_IDS.includes(categoria)) {
-    errors.push(`Categoría inválida: "${categoria}". Valores válidos: ${CATEGORIA_IDS.join(", ")}`);
+  if (!validCategoriaIds.includes(categoria)) {
+    errors.push(`Categoría inválida: "${categoria}". Valores válidos: ${validCategoriaIds.join(", ")}`);
   }
 
   const precio_compra = raw.precio_compra === "" || raw.precio_compra === undefined || raw.precio_compra === null
@@ -188,7 +184,7 @@ function validateRow(raw, rowNumber) {
 
 // ----- Plantilla -----
 
-export function downloadTemplate() {
+export function downloadTemplate(validCategoriaIds = DEFAULT_CATEGORIA_IDS) {
   const headers = HEADERS;
   // Ejemplo 1: producto en stock (mínimo). Cotización vacía = se busca de DolarAPI al importar.
   const ejemplo1 = ["ANT-001", "Reloj Longines década del 40", "relojes", "Caja oro 18k, mecánico", 80000, "", "Vitrina 1", "2026-01-10", "", "", "", "", "", "", "", "", "", "", "", ""];
@@ -202,7 +198,7 @@ export function downloadTemplate() {
     ["Campo", "Obligatorio", "Formato / valores válidos"],
     ["sku", "No", "Texto único. Ej: ANT-001. Si lo dejás vacío, se genera automático (INV-0001, INV-0002, etc.)."],
     ["nombre", "SÍ", "Texto. Nombre del producto."],
-    ["categoria", "No", `Una de: ${CATEGORIA_IDS.join(", ")}. Default: otros.`],
+    ["categoria", "No", `Una de tus categorías: ${validCategoriaIds.join(", ")}. Default: otros.`],
     ["descripcion", "No", "Texto libre."],
     ["precio_compra", "No", "Número en ARS (sin símbolo $). Default: 0."],
     ["cotizacion_compra", "No", "ARS por USD del día de compra. Si vacío y hay fecha_compra, se busca automáticamente del dólar blue."],
@@ -251,11 +247,11 @@ export async function parseExcelFile(file) {
 
 // ----- Procesar import -----
 
-export async function analyzeRows(rawRows) {
+export async function analyzeRows(rawRows, validCategoriaIds) {
   const valid = [];
   const invalid = [];
   rawRows.forEach((raw, idx) => {
-    const result = validateRow(raw, idx + 2); // +2 porque fila 1 es header, +1 para humanos
+    const result = validateRow(raw, idx + 2, validCategoriaIds); // +2 porque fila 1 es header, +1 para humanos
     if (result.ok) valid.push(result);
     else invalid.push(result);
   });
