@@ -126,18 +126,33 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('fotos-productos', 'fotos-productos', true)
 ON CONFLICT (id) DO NOTHING;
 
--- Policies del bucket: lectura publica (para mostrar fotos), escritura solo autenticado
+-- Policies del bucket:
+-- - lectura publica (para mostrar fotos)
+-- - escritura/borrado/update solo por el owner (path debe empezar con su user_id)
+-- Convencion de path: <auth.uid()>/<uuid>.<ext>
 DROP POLICY IF EXISTS "Fotos publicas" ON storage.objects;
 DROP POLICY IF EXISTS "Fotos lectura publica" ON storage.objects;
 DROP POLICY IF EXISTS "Fotos subir auth" ON storage.objects;
 DROP POLICY IF EXISTS "Fotos borrar auth" ON storage.objects;
 DROP POLICY IF EXISTS "Fotos actualizar auth" ON storage.objects;
+DROP POLICY IF EXISTS "Fotos owner subir" ON storage.objects;
+DROP POLICY IF EXISTS "Fotos owner borrar" ON storage.objects;
+DROP POLICY IF EXISTS "Fotos owner actualizar" ON storage.objects;
 
 CREATE POLICY "Fotos lectura publica" ON storage.objects
   FOR SELECT USING (bucket_id = 'fotos-productos');
-CREATE POLICY "Fotos subir auth" ON storage.objects
-  FOR INSERT TO authenticated WITH CHECK (bucket_id = 'fotos-productos');
-CREATE POLICY "Fotos borrar auth" ON storage.objects
-  FOR DELETE TO authenticated USING (bucket_id = 'fotos-productos');
-CREATE POLICY "Fotos actualizar auth" ON storage.objects
-  FOR UPDATE TO authenticated USING (bucket_id = 'fotos-productos');
+CREATE POLICY "Fotos owner subir" ON storage.objects
+  FOR INSERT TO authenticated WITH CHECK (
+    bucket_id = 'fotos-productos'
+    AND auth.uid()::text = (storage.foldername(name))[1]
+  );
+CREATE POLICY "Fotos owner borrar" ON storage.objects
+  FOR DELETE TO authenticated USING (
+    bucket_id = 'fotos-productos'
+    AND auth.uid()::text = (storage.foldername(name))[1]
+  );
+CREATE POLICY "Fotos owner actualizar" ON storage.objects
+  FOR UPDATE TO authenticated USING (
+    bucket_id = 'fotos-productos'
+    AND auth.uid()::text = (storage.foldername(name))[1]
+  );

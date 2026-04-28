@@ -299,15 +299,17 @@ function CategoryPicker({ value, onChange }) {
   );
 }
 
-function MultiPhotoUpload({ photos, onChange, onError }) {
+function MultiPhotoUpload({ photos, onChange, onError, userId }) {
   const ref = useRef();
   const [uploading, setUploading] = useState(false);
 
   const upload = async (file) => {
     setUploading(true);
     try {
+      if (!userId) throw new Error("No hay sesión activa");
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext || "jpg"}`;
+      const uuid = (crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+      const path = `${userId}/${uuid}.${ext || "jpg"}`;
       const { error } = await supabase.storage.from(BUCKET).upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type });
       if (error) throw error;
       const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
@@ -365,7 +367,7 @@ function MultiPhotoUpload({ photos, onChange, onError }) {
 }
 
 // ProductForm: solo datos del producto (sin venta). Se usa en "Nuevo" y "Editar" de Stock.
-function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError }) {
+function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError, userId }) {
   const [f, setF] = useState({
     sku: item?.sku || "",
     nombre: item?.nombre || "",
@@ -394,7 +396,7 @@ function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError 
 
   return (
     <div style={{ animation: "fadeIn 0.2s ease", paddingBottom: 30 }}>
-      <MultiPhotoUpload photos={f.fotos_urls} onChange={(v) => s("fotos_urls", v)} onError={onError} />
+      <MultiPhotoUpload photos={f.fotos_urls} onChange={(v) => s("fotos_urls", v)} onError={onError} userId={userId} />
       <Field label="SKU / código (opcional)"><input style={inp} value={f.sku} onChange={(e) => s("sku", e.target.value)} placeholder="Si lo dejás vacío, se genera automático (INV-0001)" /></Field>
       <Field label="Nombre del producto"><input style={inp} value={f.nombre} onChange={(e) => s("nombre", e.target.value)} placeholder="Ej: Reloj Longines 1940" /></Field>
       <CategoryPicker value={f.categoria} onChange={(v) => s("categoria", v)} />
@@ -1558,7 +1560,13 @@ function AuthScreen({ initialMode = "signin", onBack }) {
         <Field label="Email"><input type="email" style={inp} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="tu@email.com" required autoComplete="email" /></Field>
         <Field label="Contraseña"><input type="password" style={inp} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required minLength={6} autoComplete={mode === "signin" ? "current-password" : "new-password"} /></Field>
         {mode === "signup" && (
-          <Field label="Nombre de tu inventario (opcional)"><input style={inp} value={inventoryName} onChange={(e) => setInventoryName(e.target.value)} placeholder="Ej: Antigüedades Pérez" /></Field>
+          <>
+            <Field label="Nombre de tu inventario (opcional)"><input style={inp} value={inventoryName} onChange={(e) => setInventoryName(e.target.value)} placeholder="Ej: Antigüedades Pérez" /></Field>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "10px 12px", background: "#F1EFE8", borderRadius: 10, marginBottom: 14, fontSize: 13, color: "#5F5E5A", lineHeight: 1.4 }}>
+              <span style={{ fontSize: 16, lineHeight: 1 }}>🔒</span>
+              <span>Tu inventario es <strong>privado</strong>: nadie más lo ve. Cada cuenta tiene su propio inventario, fotos y categorías.</span>
+            </div>
+          </>
         )}
         {msg && (
           <div style={{ background: msg.type === "error" ? "#FCEBEB" : "#EAF3DE", color: msg.type === "error" ? "#A32D2D" : "#3B6D11", padding: "12px 14px", borderRadius: 12, fontSize: 15, fontWeight: 500, marginBottom: 14, lineHeight: 1.4 }}>{msg.text}</div>
@@ -1885,7 +1893,12 @@ function InventoryApp({ session }) {
           </>
         ) : (
           <>
-            <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: -0.5 }}>{headerTitle}</h1>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              {tab !== "stock" && (
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#5F5E5A", letterSpacing: 0.3, textTransform: "uppercase", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{inventoryName}</div>
+              )}
+              <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: -0.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{headerTitle}</h1>
+            </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <DolarBadge />
               {tab === "stock" && (
@@ -1917,7 +1930,7 @@ function InventoryApp({ session }) {
       <div style={{ flex: 1 }}>
         {loading ? <Spinner />
           : view === "form" ? (
-            <ProductForm item={editing} onSave={saveProduct} onDelete={editing ? softDelete : null} onRequestDelete={requestDelete} saving={saving} onError={showError} />
+            <ProductForm item={editing} onSave={saveProduct} onDelete={editing ? softDelete : null} onRequestDelete={requestDelete} saving={saving} onError={showError} userId={session?.user?.id} />
           )
           : view === "sell" && editing ? (
             <SellForm item={editing} onSave={saveSale} saving={saving} onError={showError} isEdit={!!editing.fecha_venta} />
