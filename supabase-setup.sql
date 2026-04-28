@@ -96,6 +96,17 @@ CREATE TRIGGER trigger_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at();
 
+-- Realtime: agregar la tabla a la publication para que el cliente
+-- pueda suscribirse via supabase.channel().on('postgres_changes', ...)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'productos'
+  ) THEN
+    EXECUTE 'ALTER PUBLICATION supabase_realtime ADD TABLE productos';
+  END IF;
+END $$;
+
 -- 2. RLS: solo usuarios autenticados pueden hacer algo
 ALTER TABLE productos ENABLE ROW LEVEL SECURITY;
 

@@ -1582,6 +1582,58 @@ function AuthScreen({ initialMode = "signin", onBack }) {
   );
 }
 
+function DeleteAccountModal({ open, onClose, email, onError, onSuccess }) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!open) { setTyped(""); setBusy(false); } }, [open]);
+  if (!open) return null;
+  const matches = typed.trim().toLowerCase() === (email || "").toLowerCase();
+
+  const handleDelete = async () => {
+    setBusy(true);
+    try {
+      const { error } = await supabase.functions.invoke("delete-account", { method: "POST" });
+      if (error) throw error;
+      onSuccess?.();
+      await supabase.auth.signOut();
+    } catch (err) {
+      onError?.("No se pudo eliminar la cuenta: " + (err.message || "desconocido"));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div onClick={busy ? undefined : onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 260, padding: 20, animation: "fadeIn 0.2s ease" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 18, padding: 24, maxWidth: 420, width: "100%" }}>
+        <div style={{ fontSize: 36, textAlign: "center", marginBottom: 8 }}>⚠️</div>
+        <h2 style={{ fontSize: 20, fontWeight: 700, margin: "0 0 10px", textAlign: "center", color: "#A32D2D" }}>Eliminar tu cuenta</h2>
+        <p style={{ fontSize: 14, color: "#2C2C2A", margin: "0 0 12px", lineHeight: 1.5 }}>
+          Esto borra <strong>todo</strong> de forma permanente:
+        </p>
+        <ul style={{ fontSize: 14, color: "#5F5E5A", margin: "0 0 16px 18px", lineHeight: 1.7 }}>
+          <li>Tu cuenta y email</li>
+          <li>Todos tus productos (stock + vendidos + papelera)</li>
+          <li>Todas tus fotos del inventario</li>
+        </ul>
+        <p style={{ fontSize: 13, color: "#5F5E5A", margin: "0 0 8px" }}>Para confirmar, escribí tu email:</p>
+        <input
+          style={{ width: "100%", padding: "12px 14px", fontSize: 15, border: "1px solid #E2DED2", borderRadius: 10, marginBottom: 14, fontFamily: "inherit", boxSizing: "border-box" }}
+          type="email"
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          placeholder={email}
+          disabled={busy}
+          autoComplete="off"
+        />
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onClose} disabled={busy} style={{ flex: 1, background: "#F7F6F3", color: "#2C2C2A", border: "none", borderRadius: 12, padding: "14px 0", fontSize: 15, fontWeight: 700, cursor: busy ? "default" : "pointer", fontFamily: "inherit", minHeight: 48 }}>Cancelar</button>
+          <button onClick={handleDelete} disabled={!matches || busy} style={{ flex: 1, background: matches && !busy ? "#A32D2D" : "#E2DED2", color: "#fff", border: "none", borderRadius: 12, padding: "14px 0", fontSize: 15, fontWeight: 700, cursor: matches && !busy ? "pointer" : "default", fontFamily: "inherit", minHeight: 48 }}>{busy ? "Eliminando..." : "Eliminar para siempre"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OnboardingModal({ open, onClose, inventoryName }) {
   if (!open) return null;
   return (
@@ -1609,6 +1661,70 @@ function OnboardingModal({ open, onClose, inventoryName }) {
   );
 }
 
+function TrashView({ onRestore, onPurge, onError, busy }) {
+  const [trashed, setTrashed] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("productos")
+      .select("*")
+      .not("deleted_at", "is", null)
+      .order("deleted_at", { ascending: false })
+      .limit(FETCH_LIMIT);
+    if (error) onError("Error al cargar papelera: " + error.message);
+    else setTrashed(data || []);
+    setLoading(false);
+  }, [onError]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const handleRestore = async (item) => {
+    await onRestore(item);
+    await reload();
+  };
+  const handlePurge = async (item) => {
+    await onPurge(item);
+    await reload();
+  };
+
+  if (loading) return <Spinner />;
+  if (trashed.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "4rem 1rem" }}>
+        <div style={{ fontSize: 64, marginBottom: 18, opacity: 0.25 }}>🗑️</div>
+        <p style={{ fontSize: 22, fontWeight: 700, margin: "0 0 8px" }}>Papelera vacía</p>
+        <p style={{ fontSize: 16, color: "#5F5E5A", margin: 0 }}>Los productos que elimines aparecen acá</p>
+      </div>
+    );
+  }
+  return (
+    <div style={{ animation: "fadeIn 0.2s ease", paddingBottom: 30 }}>
+      <p style={{ fontSize: 13, color: "#5F5E5A", margin: "0 0 14px", lineHeight: 1.4 }}>
+        Productos eliminados. Restaurálos para verlos de nuevo en stock o eliminalos definitivamente para liberar espacio (también se borran sus fotos).
+      </p>
+      {trashed.map((item) => {
+        const cover = (item.fotos_urls && item.fotos_urls[0]) || null;
+        const when = item.deleted_at ? new Date(item.deleted_at).toLocaleDateString() : "";
+        return (
+          <div key={item.id} style={{ display: "flex", gap: 12, padding: "12px 0", borderBottom: "1px solid #F1EFE8", alignItems: "center" }}>
+            <div style={{ width: 56, height: 56, borderRadius: 10, background: cover ? `url(${cover}) center/cover no-repeat` : "#F7F6F3", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, color: "#C2BFB6" }}>
+              {!cover && "📦"}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: "#2C2C2A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.nombre}</div>
+              <div style={{ fontSize: 12, color: "#5F5E5A" }}>Eliminado {when}{item.fotos_urls?.length ? ` · ${item.fotos_urls.length} foto${item.fotos_urls.length === 1 ? "" : "s"}` : ""}</div>
+            </div>
+            <button onClick={() => handleRestore(item)} disabled={busy} style={{ background: "#F7F6F3", color: "#2C2C2A", border: "none", borderRadius: 10, padding: "10px 12px", fontSize: 13, fontWeight: 700, cursor: busy ? "default" : "pointer", minHeight: 40, fontFamily: "inherit" }}>Restaurar</button>
+            <button onClick={() => handlePurge(item)} disabled={busy} aria-label="Eliminar definitivamente" style={{ background: "#FCEBEB", color: "#A32D2D", border: "none", borderRadius: 10, padding: "10px 12px", fontSize: 16, cursor: busy ? "default" : "pointer", minHeight: 40, fontFamily: "inherit" }}>×</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function InventoryApp({ session }) {
   const inventoryName = session?.user?.user_metadata?.inventory_name || "Mi inventario";
   const [categorias, setCategorias] = useState(() => getUserCategorias(session));
@@ -1631,6 +1747,7 @@ function InventoryApp({ session }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
 
   useEffect(() => {
     // Mostrar onboarding solo una vez por user
@@ -1659,6 +1776,41 @@ function InventoryApp({ session }) {
   }, [showError]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
+
+  // Realtime: sync productos cuando hay cambios en otro device del mismo user
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId) return;
+    const channel = supabase
+      .channel(`productos:${userId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "productos", filter: `owner_id=eq.${userId}` },
+        (payload) => {
+          setItems((prev) => {
+            if (payload.eventType === "INSERT") {
+              const row = payload.new;
+              if (row.deleted_at) return prev;
+              if (prev.some((p) => p.id === row.id)) return prev;
+              return [row, ...prev];
+            }
+            if (payload.eventType === "UPDATE") {
+              const row = payload.new;
+              if (row.deleted_at) return prev.filter((p) => p.id !== row.id);
+              const exists = prev.some((p) => p.id === row.id);
+              if (!exists) return [row, ...prev];
+              return prev.map((p) => (p.id === row.id ? row : p));
+            }
+            if (payload.eventType === "DELETE") {
+              return prev.filter((p) => p.id !== payload.old.id);
+            }
+            return prev;
+          });
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [session?.user?.id]);
 
   const saveProduct = async (product) => {
     setSaving(true);
@@ -1801,6 +1953,47 @@ function InventoryApp({ session }) {
     setSaving(false);
   };
 
+  const restoreProduct = async (item) => {
+    setSaving(true);
+    try {
+      const { error } = await supabase.from("productos").update({ deleted_at: null }).eq("id", item.id);
+      if (error) throw error;
+      await fetchItems();
+      showToast(`"${item.nombre}" restaurado`);
+    } catch (err) {
+      showError("Error al restaurar: " + err.message);
+    }
+    setSaving(false);
+  };
+
+  const purgeProduct = async (item) => {
+    setSaving(true);
+    try {
+      const paths = (item.fotos_urls || []).map(storagePathFromUrl).filter(Boolean);
+      if (paths.length) {
+        const { error: e1 } = await supabase.storage.from(BUCKET).remove(paths);
+        if (e1) throw e1;
+      }
+      const { error: e2 } = await supabase.from("productos").delete().eq("id", item.id);
+      if (e2) throw e2;
+      showToast(`"${item.nombre}" eliminado definitivamente`);
+    } catch (err) {
+      showError("Error al eliminar: " + err.message);
+    }
+    setSaving(false);
+  };
+
+  const requestPurge = (item) => {
+    setConfirmDialog({
+      title: "Eliminar definitivamente",
+      message: `Esto borra "${item.nombre}" y sus fotos para siempre. No se puede deshacer.`,
+      confirmText: "Eliminar para siempre",
+      danger: true,
+      onConfirm: () => { setConfirmDialog(null); purgeProduct(item); },
+      onCancel: () => setConfirmDialog(null),
+    });
+  };
+
   const logout = async () => { await supabase.auth.signOut(); };
 
   const handleExport = async () => {
@@ -1862,12 +2055,13 @@ function InventoryApp({ session }) {
     else if (view === "form") { setView("list"); setEditing(null); }
     else if (view === "sell") { setView("detail"); }
     else if (view === "detail") { setView("list"); setSelected(null); }
+    else if (view === "trash") { setView("list"); }
   };
 
   const showingSubView = view !== "list";
 
   const headerTitle = showingSubView
-    ? (view === "form" ? (editing ? "Editar producto" : "Nuevo producto") : view === "sell" ? (editing?.fecha_venta ? "Editar venta" : "Marcar como vendido") : "Detalle")
+    ? (view === "form" ? (editing ? "Editar producto" : "Nuevo producto") : view === "sell" ? (editing?.fecha_venta ? "Editar venta" : "Marcar como vendido") : view === "trash" ? "Papelera" : "Detalle")
     : (tab === "stock" ? inventoryName : tab === "vendidos" ? "Vendidos" : tab === "cheques" ? "Cheques" : "Análisis");
 
   return (
@@ -1917,7 +2111,10 @@ function InventoryApp({ session }) {
                       <button onClick={() => { setMenuOpen(false); setImportOpen(true); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>📥 Importar productos desde Excel</button>
                       <button onClick={() => { setMenuOpen(false); handleExport(); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>📤 Exportar productos a Excel</button>
                       <div style={{ height: 1, background: "#F1EFE8", margin: "4px 0" }} />
+                      <button onClick={() => { setMenuOpen(false); setView("trash"); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>🗑️ Papelera</button>
+                      <div style={{ height: 1, background: "#F1EFE8", margin: "4px 0" }} />
                       <button onClick={() => { setMenuOpen(false); logout(); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "14px", fontSize: 15, fontWeight: 700, color: "#A32D2D", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 48 }}>Cerrar sesión</button>
+                      <button onClick={() => { setMenuOpen(false); setDeleteAccountOpen(true); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 13, fontWeight: 600, color: "#A32D2D", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 40, opacity: 0.85 }}>Eliminar mi cuenta...</button>
                     </div>
                   </>
                 )}
@@ -1945,6 +2142,9 @@ function InventoryApp({ session }) {
               onMarkCobrado={() => markCobrado(selected)}
               onUnmarkCobrado={() => unmarkCobrado(selected)}
             />
+          )
+          : view === "trash" ? (
+            <TrashView onRestore={restoreProduct} onPurge={requestPurge} onError={showError} busy={saving} />
           )
           : tab === "stock" ? (
             stockItems.length === 0 ? (
@@ -2001,6 +2201,13 @@ function InventoryApp({ session }) {
       <Modal open={!!confirmDialog} {...(confirmDialog || {})} />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} onComplete={fetchItems} showError={showError} categorias={categorias} />
       <OnboardingModal open={showOnboarding} onClose={dismissOnboarding} inventoryName={inventoryName} />
+      <DeleteAccountModal
+        open={deleteAccountOpen}
+        onClose={() => setDeleteAccountOpen(false)}
+        email={session?.user?.email}
+        onError={showError}
+        onSuccess={() => setDeleteAccountOpen(false)}
+      />
       <CategoriasManager open={categoriasOpen} onClose={() => setCategoriasOpen(false)} categorias={categorias} onSave={async (next) => {
         const { error } = await supabase.auth.updateUser({ data: { categorias: next } });
         if (error) { showError("Error guardando: " + error.message); return false; }
