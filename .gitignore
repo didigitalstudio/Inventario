@@ -7,3 +7,6 @@ dist
 .supabase-db-password.txt
 
 .vercel
+
+.vercel
+.env*.local

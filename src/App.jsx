@@ -367,7 +367,7 @@ function MultiPhotoUpload({ photos, onChange, onError, userId }) {
 }
 
 // ProductForm: solo datos del producto (sin venta). Se usa en "Nuevo" y "Editar" de Stock.
-function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError, userId }) {
+function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError, userId, fotosEnabled }) {
   const [f, setF] = useState({
     sku: item?.sku || "",
     nombre: item?.nombre || "",
@@ -396,7 +396,18 @@ function ProductForm({ item, onSave, onDelete, saving, onRequestDelete, onError,
 
   return (
     <div style={{ animation: "fadeIn 0.2s ease", paddingBottom: 30 }}>
-      <MultiPhotoUpload photos={f.fotos_urls} onChange={(v) => s("fotos_urls", v)} onError={onError} userId={userId} />
+      {fotosEnabled ? (
+        <MultiPhotoUpload photos={f.fotos_urls} onChange={(v) => s("fotos_urls", v)} onError={onError} userId={userId} />
+      ) : (
+        <div style={{ background: "#F0F7FF", border: "1px solid #CCE4FF", borderRadius: 12, padding: "16px 14px", marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, textTransform: "uppercase", background: "#1a6bbf", color: "#fff", borderRadius: 6, padding: "2px 8px" }}>Pro</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#1a3a5c" }}>Fotos de productos</span>
+          </div>
+          <p style={{ fontSize: 12, color: "#3a5a7c", margin: "0 0 10px" }}>Esta función está disponible en el plan Starter/Pro.</p>
+          <a href="mailto:info@didigitalstudio.com?subject=Consulta%20plan%20-%20Inventario" style={{ fontSize: 12, color: "#1a6bbf", fontWeight: 700, textDecoration: "none" }}>Contactar a DI Digital Studio →</a>
+        </div>
+      )}
       <Field label="SKU / código (opcional)"><input style={inp} value={f.sku} onChange={(e) => s("sku", e.target.value)} placeholder="Si lo dejás vacío, se genera automático (INV-0001)" /></Field>
       <Field label="Nombre del producto"><input style={inp} value={f.nombre} onChange={(e) => s("nombre", e.target.value)} placeholder="Ej: Reloj Longines 1940" /></Field>
       <CategoryPicker value={f.categoria} onChange={(v) => s("categoria", v)} />
@@ -1749,6 +1760,19 @@ function InventoryApp({ session }) {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
 
+  const [features, setFeatures] = useState({});
+  const [upgradeModal, setUpgradeModal] = useState(null); // null | string (feature name)
+
+  useEffect(() => {
+    supabase.rpc("get_user_features").then(({ data }) => {
+      setFeatures((data) || {});
+    });
+  }, []);
+
+  const isFree = Object.keys(features).length === 0;
+  const fotosEnabled = features.fotos === true;
+  const exportEnabled = features.export_excel === true;
+
   useEffect(() => {
     // Mostrar onboarding solo una vez por user
     const key = `${ONBOARDING_KEY}:${session?.user?.id}`;
@@ -2060,6 +2084,8 @@ function InventoryApp({ session }) {
 
   const showingSubView = view !== "list";
 
+  const atLimit = isFree && stockItems.length >= 50;
+
   const headerTitle = showingSubView
     ? (view === "form" ? (editing ? "Editar producto" : "Nuevo producto") : view === "sell" ? (editing?.fecha_venta ? "Editar venta" : "Marcar como vendido") : view === "trash" ? "Papelera" : "Detalle")
     : (tab === "stock" ? inventoryName : tab === "vendidos" ? "Vendidos" : tab === "cheques" ? "Cheques" : "Análisis");
@@ -2096,7 +2122,10 @@ function InventoryApp({ session }) {
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <DolarBadge />
               {tab === "stock" && (
-                <button onClick={() => { setView("form"); setEditing(null); setSelected(null); }} style={{ background: "#1D9E75", color: "#fff", border: "none", borderRadius: 12, padding: "12px 18px", fontSize: 15, fontWeight: 700, cursor: "pointer", minHeight: 48 }}>+ Agregar</button>
+                <button
+                  onClick={() => { if (atLimit) { showToast("Límite de 50 productos alcanzado. Actualizá a Starter para más.", "error"); return; } setView("form"); setEditing(null); setSelected(null); }}
+                  style={{ background: atLimit ? "#9FE1CB" : "#1D9E75", color: "#fff", border: "none", borderRadius: 12, padding: "12px 18px", fontSize: 15, fontWeight: 700, cursor: atLimit ? "default" : "pointer", minHeight: 48 }}
+                >+ Agregar</button>
               )}
               <div style={{ position: "relative" }}>
                 <button onClick={() => setMenuOpen((v) => !v)} aria-label="Menú" style={{ background: "#F7F6F3", border: "none", borderRadius: 12, width: 48, height: 48, fontSize: 22, cursor: "pointer", fontFamily: "inherit" }}>⋯</button>
@@ -2109,7 +2138,10 @@ function InventoryApp({ session }) {
                       <div style={{ height: 1, background: "#F1EFE8", margin: "4px 0" }} />
                       <button onClick={() => { setMenuOpen(false); downloadTemplate(categorias.map((c) => c.id)); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>📄 Descargar plantilla Excel</button>
                       <button onClick={() => { setMenuOpen(false); setImportOpen(true); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>📥 Importar productos desde Excel</button>
-                      <button onClick={() => { setMenuOpen(false); handleExport(); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>📤 Exportar productos a Excel</button>
+                      <button onClick={() => { if (!exportEnabled) { setMenuOpen(false); setUpgradeModal("Exportar a Excel"); return; } setMenuOpen(false); handleExport(); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: exportEnabled ? "#2C2C2A" : "#9a9a95", cursor: exportEnabled ? "pointer" : "default", borderRadius: 8, fontFamily: "inherit", minHeight: 44, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span>📤 Exportar productos a Excel</span>
+                        {!exportEnabled && <span style={{ fontSize: 11, background: "#E8F3FF", color: "#1a6bbf", borderRadius: 6, padding: "3px 8px", fontWeight: 700 }}>Starter</span>}
+                      </button>
                       <div style={{ height: 1, background: "#F1EFE8", margin: "4px 0" }} />
                       <button onClick={() => { setMenuOpen(false); setView("trash"); }} style={{ width: "100%", background: "none", border: "none", textAlign: "left", padding: "12px 14px", fontSize: 15, fontWeight: 600, color: "#2C2C2A", cursor: "pointer", borderRadius: 8, fontFamily: "inherit", minHeight: 44 }}>🗑️ Papelera</button>
                       <div style={{ height: 1, background: "#F1EFE8", margin: "4px 0" }} />
@@ -2124,10 +2156,21 @@ function InventoryApp({ session }) {
         )}
       </div>
 
+      {isFree && (
+        <div style={{ background: "#F0F7FF", border: "1px solid #CCE4FF", borderRadius: 10, padding: "12px 14px", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, textTransform: "uppercase", background: "#1a6bbf", color: "#fff", borderRadius: 6, padding: "2px 8px" }}>Plan Free</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#1a3a5c" }}>Hasta 50 productos</span>
+          </div>
+          <p style={{ fontSize: 12, color: "#3a5a7c", margin: "0 0 6px" }}>Sin fotos ni exportación. Actualizá a Starter o Pro para desbloquear todas las funciones.</p>
+          <a href="mailto:info@didigitalstudio.com?subject=Consulta%20plan%20-%20Inventario" style={{ fontSize: 12, color: "#1a6bbf", fontWeight: 700, textDecoration: "none" }}>Contactar a DI Digital Studio →</a>
+        </div>
+      )}
+
       <div style={{ flex: 1 }}>
         {loading ? <Spinner />
           : view === "form" ? (
-            <ProductForm item={editing} onSave={saveProduct} onDelete={editing ? softDelete : null} onRequestDelete={requestDelete} saving={saving} onError={showError} userId={session?.user?.id} />
+            <ProductForm item={editing} onSave={saveProduct} onDelete={editing ? softDelete : null} onRequestDelete={requestDelete} saving={saving} onError={showError} userId={session?.user?.id} fotosEnabled={fotosEnabled} />
           )
           : view === "sell" && editing ? (
             <SellForm item={editing} onSave={saveSale} saving={saving} onError={showError} isEdit={!!editing.fecha_venta} />
@@ -2216,6 +2259,19 @@ function InventoryApp({ session }) {
         return true;
       }} items={items} />
     </div>
+      {upgradeModal && (
+        <div onClick={() => setUpgradeModal(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, padding: 24, maxWidth: 320, width: "100%", boxShadow: "0 8px 40px rgba(0,0,0,0.2)" }}>
+            <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, textTransform: "uppercase", background: "#1a6bbf", color: "#fff", borderRadius: 6, padding: "3px 10px" }}>Plan Pro</span>
+            <h3 style={{ fontSize: 17, fontWeight: 700, color: "#2C2C2A", margin: "12px 0 6px" }}>{upgradeModal} requiere un plan superior</h3>
+            <p style={{ fontSize: 13, color: "#5F5E5A", lineHeight: 1.5, marginBottom: 18 }}>Esta función está disponible en el plan Starter o Pro. Contactanos y lo activamos en menos de 24 hs hábiles.</p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <a href="mailto:info@didigitalstudio.com?subject=Consulta%20plan%20-%20Inventario" style={{ flex: 1, textAlign: "center", background: "#1D9E75", color: "#fff", borderRadius: 12, padding: "12px 0", fontSize: 14, fontWeight: 700, textDecoration: "none" }}>Contactar a DI Digital</a>
+              <button onClick={() => setUpgradeModal(null)} style={{ padding: "12px 16px", border: "1px solid #E0DDD8", borderRadius: 12, background: "none", fontSize: 14, cursor: "pointer", fontFamily: "inherit", color: "#5F5E5A" }}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </CategoriasContext.Provider>
   );
 }
