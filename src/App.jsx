@@ -1537,7 +1537,7 @@ function AuthScreen({ initialMode = "signin", onBack }) {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       } else {
-        const { error } = await supabase.auth.signUp({
+        const { data: signUpData, error } = await supabase.auth.signUp({
           email, password,
           options: { data: {
             inventory_name: inventoryName.trim() || "Mi inventario",
@@ -1545,7 +1545,11 @@ function AuthScreen({ initialMode = "signin", onBack }) {
           } },
         });
         if (error) throw error;
-        setMsg({ type: "success", text: "Cuenta creada. Si te pide confirmar el email te llega un mail; si no, ya entrás directo." });
+        // Registrar en inventario_users y notificar al admin (fail-soft).
+        if (signUpData?.user) {
+          supabase.functions.invoke("notify-signup").catch(() => {});
+        }
+        setMsg({ type: "success", text: "Cuenta creada. Revisá tu email — te avisamos cuando tu acceso esté activo." });
       }
     } catch (err) {
       setMsg({ type: "error", text: err.message || "Error de autenticación" });
@@ -2276,31 +2280,81 @@ function InventoryApp({ session }) {
   );
 }
 
+function AccountBlocked({ variant }) {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
+  const CONFIG = {
+    pending: {
+      icon: "⏳",
+      title: "Cuenta pendiente de aprobación",
+      description: "Registramos tu solicitud. Te avisaremos por email cuando tu acceso esté activo.",
+    },
+    paused: {
+      icon: "⏸",
+      title: "Cuenta suspendida",
+      description: "Tu acceso fue suspendido temporalmente. Contactate con nosotros en info@didigitalstudio.com.",
+    },
+  };
+  const { icon, title, description } = CONFIG[variant];
+  return (
+    <div style={{ fontFamily: "'DM Sans','Segoe UI',-apple-system,sans-serif", minHeight: "100dvh", display: "flex", alignItems: "center", justifyContent: "center", padding: "0 20px", background: "#FAF9F5" }}>
+      <div style={{ maxWidth: 380, width: "100%", textAlign: "center" }}>
+        <div style={{ fontSize: 56, marginBottom: 16 }}>{icon}</div>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#2C2C2A", marginBottom: 8 }}>{title}</h1>
+        <p style={{ fontSize: 14, color: "#5F5E5A", lineHeight: 1.6, marginBottom: 24 }}>{description}</p>
+        <button onClick={handleLogout} style={{ background: "none", border: "none", color: "#1D9E75", fontSize: 14, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}>
+          Cerrar sesión
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [publicView, setPublicView] = useState("landing"); // landing | signin | signup
+  const [approval, setApproval] = useState(null); // null | 'ok' | 'pending' | 'paused'
+
+  const checkApproval = async (userId) => {
+    const { data: userRow } = await supabase.from("inventario_users").select("aprobado").eq("user_id", userId).maybeSingle();
+    if (!userRow) { setApproval("ok"); return; } // Usuario sin registro (antiguo) → libre
+    if (!userRow.aprobado) { setApproval("pending"); return; }
+    const { data: subRow } = await supabase.from("user_subscriptions").select("estado").eq("user_id", userId).maybeSingle();
+    setApproval(subRow?.estado === "paused" ? "paused" : "ok");
+  };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
+      if (session) await checkApproval(session.user.id);
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, s) => {
       setSession(s);
-      if (s) setPublicView("landing"); // reset para próximo logout
+      if (s) {
+        setPublicView("landing");
+        setApproval(null);
+        await checkApproval(s.user.id);
+      } else {
+        setApproval(null);
+      }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  if (loading) {
-    return (
-      <div style={{ minHeight: "100dvh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-        <Spinner />
-      </div>
-    );
-  }
+  const spinner = (
+    <div style={{ minHeight: "100dvh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <Spinner />
+    </div>
+  );
+
+  if (loading) return spinner;
+  if (session && approval === null) return spinner;
+  if (session && approval === "pending") return <AccountBlocked variant="pending" />;
+  if (session && approval === "paused") return <AccountBlocked variant="paused" />;
   if (session) return <InventoryApp session={session} />;
   if (publicView === "landing") return <LandingPage onCta={(mode) => setPublicView(mode)} />;
   return <AuthScreen initialMode={publicView} onBack={() => setPublicView("landing")} />;
